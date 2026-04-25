@@ -1,8 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import ReactECharts from "echarts-for-react";
-import { Bot, Database, RefreshCw, Send } from "lucide-react";
+import { Bot, Database, Moon, RefreshCw, Send, Sun } from "lucide-react";
 import "./styles.css";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -37,9 +37,18 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 function App() {
   const [selectedFund, setSelectedFund] = useState("KR70183J0002");
   const [chatInput, setChatInput] = useState("");
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    const saved = localStorage.getItem("theme");
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
   const [chatMessages, setChatMessages] = useState<string[]>([
     "최근 3일간 비중 변화 큰 종목 찾아줘",
   ]);
+
+  useEffect(() => {
+    localStorage.setItem("theme", theme);
+  }, [theme]);
 
   const etfs = useQuery({
     queryKey: ["etfs"],
@@ -73,23 +82,36 @@ function App() {
 
   const chartOption = useMemo(
     () => ({
-      tooltip: { trigger: "axis" },
+      backgroundColor: "transparent",
+      textStyle: { color: theme === "dark" ? "#d7dde8" : "#334155" },
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: theme === "dark" ? "#181b20" : "#ffffff",
+        borderColor: theme === "dark" ? "#343a43" : "#d9dee7",
+        textStyle: { color: theme === "dark" ? "#f8fafc" : "#0f172a" },
+      },
       grid: { top: 24, right: 24, bottom: 32, left: 56 },
       xAxis: {
         type: "category",
         data: (changes.data ?? []).slice(0, 10).map((item) => item.asset_name),
-        axisLabel: { rotate: 35 },
+        axisLabel: { rotate: 35, color: theme === "dark" ? "#9aa4b2" : "#64748b" },
+        axisLine: { lineStyle: { color: theme === "dark" ? "#343a43" : "#cbd5e1" } },
       },
-      yAxis: { type: "value", name: "비중 변화" },
+      yAxis: {
+        type: "value",
+        name: "비중 변화",
+        axisLabel: { color: theme === "dark" ? "#9aa4b2" : "#64748b" },
+        splitLine: { lineStyle: { color: theme === "dark" ? "#272b32" : "#e2e8f0" } },
+      },
       series: [
         {
           type: "bar",
           data: (changes.data ?? []).slice(0, 10).map((item) => Number(item.weight_delta?.toFixed(2))),
-          itemStyle: { color: "#2563eb" },
+          itemStyle: { color: theme === "dark" ? "#63a7ff" : "#2563eb" },
         },
       ],
     }),
-    [changes.data],
+    [changes.data, theme],
   );
 
   function submitChat(message: string) {
@@ -100,11 +122,10 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-theme={theme}>
       <header className="topbar">
         <div>
           <h1>ETF Portfolio Profiler</h1>
-          <p>TIGER holdings change demo</p>
         </div>
         <div className="toolbar">
           <select value={selectedFund} onChange={(event) => setSelectedFund(event.target.value)}>
@@ -122,6 +143,14 @@ function App() {
           <button onClick={() => collectHoldings.mutate()}>
             <RefreshCw size={16} />
             구성종목 수집
+          </button>
+          <button
+            className="icon-button"
+            aria-label={theme === "dark" ? "라이트 테마로 전환" : "다크 테마로 전환"}
+            title={theme === "dark" ? "라이트 테마" : "다크 테마"}
+            onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+          >
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
         </div>
       </header>
@@ -156,8 +185,16 @@ function App() {
           </form>
         </aside>
 
-        <section className="data-workbench">
-          <section className="pivot-panel">
+        <section className="analysis-canvas">
+          <div className="canvas-toolbar">
+            <div className="canvas-title">분석 캔버스</div>
+            <div className="canvas-actions">
+              <span>자동 저장</span>
+              <span>공유</span>
+              <span>내보내기</span>
+            </div>
+          </div>
+          <section className="pivot-panel canvas-section">
             <div className="section-heading">
               <h2>피벗형 분석 표</h2>
               <span>행: 종목명 / 열: 기준일 / 값: 비중 변화량 / 필터: 최근 3일</span>
@@ -186,7 +223,7 @@ function App() {
             </table>
           </section>
 
-          <section className="chart-panel">
+          <section className="chart-panel canvas-section">
             <div className="section-heading">
               <h2>차트</h2>
               <span>상위 10개 비중 변화</span>
@@ -206,4 +243,3 @@ createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>,
 );
-

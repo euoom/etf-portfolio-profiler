@@ -28,8 +28,10 @@ The frontend never calls LLM providers directly.
 The app is a static Vite React SPA:
 
 - left: AI analysis panel
-- right top: pivot-like table
-- right bottom: chart
+- right: analysis canvas
+- canvas top: pivot-like table
+- canvas bottom: chart
+- light/dark theme toggle
 
 Initial suggested prompt:
 
@@ -41,4 +43,3 @@ Initial suggested prompt:
 
 The POC may use local terminal login based CLI tools through `LocalCliProvider`.
 Production should move to user-configured provider credentials.
-

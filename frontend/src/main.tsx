@@ -355,9 +355,6 @@ function App() {
               <button className={analysisMode === "list" ? "mode-active" : ""} onClick={() => setAnalysisMode("list")}>
                 목록
               </button>
-              <button className={analysisMode === "single" ? "mode-active" : ""} onClick={() => setAnalysisMode("single")}>
-                상세
-              </button>
               <button className={analysisMode === "cross" ? "mode-active" : ""} onClick={() => setAnalysisMode("cross")}>
                 종목 합산
               </button>
@@ -406,15 +403,18 @@ function App() {
                   </thead>
                   <tbody>
                     {(etfChangeSummary.data?.rows ?? []).map((item) => (
-                      <tr
-                        key={item.ksd_fund}
-                        className="clickable-row"
-                        onClick={() => {
-                          setSelectedFund(item.ksd_fund);
-                          setAnalysisMode("single");
-                        }}
-                      >
-                        <td>{item.etf_name}</td>
+                      <tr key={item.ksd_fund}>
+                        <td>
+                          <button
+                            className="text-link"
+                            onClick={() => {
+                              setSelectedFund(item.ksd_fund);
+                              setAnalysisMode("single");
+                            }}
+                          >
+                            {item.etf_name}
+                          </button>
+                        </td>
                         <td>{formatExtreme(item.max_quantity_increase, "%")}</td>
                         <td>{formatExtreme(item.max_quantity_decrease, "%")}</td>
                         <td>{formatExtreme(item.max_weight_increase, "%p")}</td>

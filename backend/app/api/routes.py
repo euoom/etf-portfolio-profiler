@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.db.database import get_connection
 from app.llm.provider import get_provider
-from app.services.analysis import cross_etf_weight_changes, holdings_pivot, list_etfs, weight_changes
+from app.services.analysis import cross_etf_weight_changes, etf_change_summary, holdings_pivot, list_etfs, weight_changes
 from app.services.storage import insert_holdings_snapshot, snapshot_exists, upsert_products
 from app.services.tiger_collector import TigerCollector, recent_weekdays
 
@@ -147,6 +147,12 @@ def get_holdings_pivot(ksd_fund: str, days: int = 3) -> dict:
 def get_cross_etf_weight_changes(days: int = 3, limit: int = 40) -> dict:
     with get_connection() as conn:
         return cross_etf_weight_changes(conn, days=days, limit=limit)
+
+
+@router.get("/analysis/etf-change-summary")
+def get_etf_change_summary(days: int = 3, limit: int = 100) -> dict:
+    with get_connection() as conn:
+        return etf_change_summary(conn, days=days, limit=limit)
 
 
 @router.post("/chat")

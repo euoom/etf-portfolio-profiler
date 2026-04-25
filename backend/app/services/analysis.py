@@ -198,3 +198,133 @@ def cross_etf_weight_changes(conn: sqlite3.Connection, days: int = 3, limit: int
 
     change_rows.sort(key=lambda item: abs(item["weight_delta"]), reverse=True)
     return {"dates": dates, "rows": change_rows[:limit]}
+
+
+def etf_change_summary(conn: sqlite3.Connection, days: int = 3, limit: int = 100) -> dict:
+    rows = conn.execute(
+        """
+        SELECT
+            e.ksd_fund,
+            e.name AS etf_name,
+            h.asset_code,
+            h.asset_name,
+            s.base_date,
+            h.quantity,
+            h.weight
+        FROM etf_daily_holding h
+        JOIN etf_daily_snapshot s ON s.snapshot_id = h.snapshot_id
+        JOIN etf e ON e.etf_id = s.etf_id
+        WHERE s.base_date IN (
+            SELECT DISTINCT base_date
+            FROM etf_daily_snapshot
+            ORDER BY base_date DESC
+            LIMIT ?
+        )
+        ORDER BY e.name, h.asset_name, s.base_date
+        """,
+        (days,),
+    ).fetchall()
+
+    dates = sorted({row["base_date"] for row in rows})
+    by_etf: dict[tuple[str, str], dict[tuple[str, str], dict]] = {}
+    for row in rows:
+        etf_key = (row["ksd_fund"], row["etf_name"])
+        asset_key = (row["asset_code"], row["asset_name"])
+        item = by_etf.setdefault(etf_key, {}).setdefault(
+            asset_key,
+            {
+                "asset_code": row["asset_code"],
+                "asset_name": row["asset_name"],
+                "quantities": {},
+                "weights": {},
+            },
+        )
+        item["quantities"][row["base_date"]] = row["quantity"]
+        item["weights"][row["base_date"]] = row["weight"]
+
+    summaries = []
+    if not dates:
+        return {"dates": [], "rows": []}
+
+    start_date = dates[0]
+    end_date = dates[-1]
+    for (ksd_fund, etf_name), assets in by_etf.items():
+        summary = {
+            "ksd_fund": ksd_fund,
+            "etf_name": etf_name,
+            "max_quantity_increase": None,
+            "max_quantity_decrease": None,
+            "max_weight_increase": None,
+            "max_weight_decrease": None,
+        }
+
+        for asset in assets.values():
+            start_quantity = asset["quantities"].get(start_date)
+            end_quantity = asset["quantities"].get(end_date)
+            quantity_change_pct = None
+            if start_quantity not in (None, 0) and end_quantity is not None:
+                quantity_change_pct = ((end_quantity - start_quantity) / abs(start_quantity)) * 100
+
+            start_weight = asset["weights"].get(start_date) or 0
+            end_weight = asset["weights"].get(end_date) or 0
+            weight_delta = end_weight - start_weight
+
+            _assign_extreme(
+                summary,
+                "max_quantity_increase",
+                quantity_change_pct,
+                asset,
+                start_quantity,
+                end_quantity,
+                larger=True,
+            )
+            _assign_extreme(
+                summary,
+                "max_quantity_decrease",
+                quantity_change_pct,
+                asset,
+                start_quantity,
+                end_quantity,
+                larger=False,
+            )
+            _assign_extreme(summary, "max_weight_increase", weight_delta, asset, start_weight, end_weight, larger=True)
+            _assign_extreme(summary, "max_weight_decrease", weight_delta, asset, start_weight, end_weight, larger=False)
+
+        summaries.append(summary)
+
+    summaries.sort(
+        key=lambda item: max(
+            abs((item["max_quantity_increase"] or {}).get("value") or 0),
+            abs((item["max_quantity_decrease"] or {}).get("value") or 0),
+            abs((item["max_weight_increase"] or {}).get("value") or 0),
+            abs((item["max_weight_decrease"] or {}).get("value") or 0),
+        ),
+        reverse=True,
+    )
+    return {"dates": dates, "rows": summaries[:limit]}
+
+
+def _assign_extreme(
+    summary: dict,
+    key: str,
+    value: float | None,
+    asset: dict,
+    start_value: float | None,
+    end_value: float | None,
+    larger: bool,
+) -> None:
+    if value is None:
+        return
+    if larger and value <= 0:
+        return
+    if not larger and value >= 0:
+        return
+    current = summary[key]
+    if current is None or (larger and value > current["value"]) or (not larger and value < current["value"]):
+        summary[key] = {
+            "asset_code": asset["asset_code"],
+            "asset_name": asset["asset_name"],
+            "value": value,
+            "start_value": start_value,
+            "end_value": end_value,
+        }

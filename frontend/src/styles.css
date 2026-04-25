@@ -75,6 +75,10 @@ select {
   min-width: 240px;
 }
 
+.toolbar select + select {
+  min-width: 150px;
+}
+
 .toolbar button,
 .chat-input button,
 .suggestion {
@@ -101,7 +105,7 @@ select {
 
 .workspace {
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 360px;
   gap: 18px;
   min-height: calc(100vh - 64px);
   padding: 18px;
@@ -375,6 +379,25 @@ th {
 .cross-grid td:last-child {
   color: var(--muted);
   text-align: left;
+}
+
+.summary-grid th:first-child,
+.summary-grid td:first-child {
+  min-width: 260px;
+}
+
+.summary-grid th:not(:first-child),
+.summary-grid td:not(:first-child) {
+  min-width: 220px;
+  text-align: left;
+}
+
+.clickable-row {
+  cursor: pointer;
+}
+
+.clickable-row:hover td {
+  background: var(--surface-subtle);
 }
 
 .positive {

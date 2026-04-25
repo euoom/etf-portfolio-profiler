@@ -181,6 +181,9 @@ class TigerCollector:
                 snapshots.append(snapshot)
         return snapshots
 
+    def latest_fix_date(self, ksd_fund: str) -> str:
+        return self._fetch_default_fix_date(ksd_fund)
+
     def _fetch_default_fix_date(self, ksd_fund: str) -> str:
         response = self._client.post(PDF_CONTAINER_URL, data={"ksdFund": ksd_fund, "fixDate": "", "prfPrd": "", "order": ""})
         response.raise_for_status()

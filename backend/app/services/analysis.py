@@ -109,3 +109,92 @@ def holdings_pivot(conn: sqlite3.Connection, ksd_fund: str, days: int = 3) -> di
 
     pivot_rows.sort(key=lambda item: abs(item["weight_delta"]), reverse=True)
     return {"dates": dates, "rows": pivot_rows}
+
+
+def cross_etf_weight_changes(conn: sqlite3.Connection, days: int = 3, limit: int = 40) -> dict:
+    date_rows = conn.execute(
+        """
+        SELECT DISTINCT base_date
+        FROM etf_daily_snapshot
+        ORDER BY base_date DESC
+        LIMIT ?
+        """,
+        (days,),
+    ).fetchall()
+    dates = sorted(row["base_date"] for row in date_rows)
+    if not dates:
+        return {"dates": [], "rows": []}
+
+    placeholders = ",".join("?" for _ in dates)
+    rows = conn.execute(
+        f"""
+        SELECT
+            h.asset_code,
+            h.asset_name,
+            s.base_date,
+            SUM(COALESCE(h.weight, 0)) AS total_weight,
+            COUNT(DISTINCT e.etf_id) AS etf_count
+        FROM etf_daily_holding h
+        JOIN etf_daily_snapshot s ON s.snapshot_id = h.snapshot_id
+        JOIN etf e ON e.etf_id = s.etf_id
+        WHERE s.base_date IN ({placeholders})
+        GROUP BY h.asset_code, h.asset_name, s.base_date
+        """,
+        tuple(dates),
+    ).fetchall()
+
+    latest_date = dates[-1]
+    exposure_rows = conn.execute(
+        """
+        SELECT
+            h.asset_code,
+            h.asset_name,
+            e.name AS etf_name,
+            h.weight
+        FROM etf_daily_holding h
+        JOIN etf_daily_snapshot s ON s.snapshot_id = h.snapshot_id
+        JOIN etf e ON e.etf_id = s.etf_id
+        WHERE s.base_date = ?
+        ORDER BY h.asset_code, COALESCE(h.weight, 0) DESC
+        """,
+        (latest_date,),
+    ).fetchall()
+
+    by_asset: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        key = (row["asset_code"], row["asset_name"])
+        item = by_asset.setdefault(
+            key,
+            {
+                "asset_code": row["asset_code"],
+                "asset_name": row["asset_name"],
+                "weights": {base_date: 0 for base_date in dates},
+                "etf_counts": {base_date: 0 for base_date in dates},
+                "latest_exposures": [],
+            },
+        )
+        item["weights"][row["base_date"]] = row["total_weight"]
+        item["etf_counts"][row["base_date"]] = row["etf_count"]
+
+    for row in exposure_rows:
+        key = (row["asset_code"], row["asset_name"])
+        if key not in by_asset:
+            continue
+        exposures = by_asset[key]["latest_exposures"]
+        if len(exposures) < 5:
+            exposures.append({"etf_name": row["etf_name"], "weight": row["weight"]})
+
+    start_date = dates[0]
+    end_date = dates[-1]
+    change_rows = []
+    for item in by_asset.values():
+        start_weight = item["weights"].get(start_date) or 0
+        end_weight = item["weights"].get(end_date) or 0
+        item["start_weight"] = start_weight
+        item["end_weight"] = end_weight
+        item["weight_delta"] = end_weight - start_weight
+        item["latest_etf_count"] = item["etf_counts"].get(end_date) or 0
+        change_rows.append(item)
+
+    change_rows.sort(key=lambda item: abs(item["weight_delta"]), reverse=True)
+    return {"dates": dates, "rows": change_rows[:limit]}

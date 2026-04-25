@@ -30,6 +30,23 @@ type PivotResponse = {
   rows: PivotRow[];
 };
 
+type CrossEtfRow = {
+  asset_code: string;
+  asset_name: string;
+  weights: Record<string, number>;
+  etf_counts: Record<string, number>;
+  start_weight: number;
+  end_weight: number;
+  weight_delta: number;
+  latest_etf_count: number;
+  latest_exposures: { etf_name: string; weight: number | null }[];
+};
+
+type CrossEtfResponse = {
+  dates: string[];
+  rows: CrossEtfRow[];
+};
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, init);
   if (!response.ok) {
@@ -46,6 +63,7 @@ function App() {
     if (saved === "light" || saved === "dark") return saved;
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
+  const [analysisMode, setAnalysisMode] = useState<"single" | "cross">("single");
   const [chatMessages, setChatMessages] = useState<string[]>([
     "최근 3일간 비중 변화 큰 종목 찾아줘",
   ]);
@@ -62,6 +80,11 @@ function App() {
   const pivot = useQuery({
     queryKey: ["holdings-pivot", selectedFund],
     queryFn: () => api<PivotResponse>(`/api/analysis/holdings-pivot?ksd_fund=${selectedFund}&days=3`),
+  });
+
+  const crossEtfChanges = useQuery({
+    queryKey: ["cross-etf-weight-changes"],
+    queryFn: () => api<CrossEtfResponse>("/api/analysis/cross-etf-weight-changes?days=3&limit=40"),
   });
 
   const collectProducts = useMutation({
@@ -83,6 +106,14 @@ function App() {
     },
   });
 
+  const collectRecentWatchlist = useMutation({
+    mutationFn: () => api("/api/collect/tiger/recent-watchlist?days=3&limit=5", { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["holdings-pivot", selectedFund] });
+      queryClient.invalidateQueries({ queryKey: ["cross-etf-weight-changes"] });
+    },
+  });
+
   const chat = useMutation({
     mutationFn: (message: string) =>
       api<{ message: string }>("/api/chat", {
@@ -95,6 +126,47 @@ function App() {
 
   const chartOption = useMemo(
     () => {
+      if (analysisMode === "cross") {
+        const rows = (crossEtfChanges.data?.rows ?? []).slice(0, 14).reverse();
+        return {
+          backgroundColor: "transparent",
+          color: [theme === "dark" ? "#63a7ff" : "#2563eb"],
+          textStyle: { color: theme === "dark" ? "#d7dde8" : "#334155" },
+          tooltip: {
+            trigger: "axis",
+            axisPointer: { type: "shadow" },
+            backgroundColor: theme === "dark" ? "#181b20" : "#ffffff",
+            borderColor: theme === "dark" ? "#343a43" : "#d9dee7",
+            textStyle: { color: theme === "dark" ? "#f8fafc" : "#0f172a" },
+            valueFormatter: (value: number) => `${Number(value).toFixed(2)}%p`,
+          },
+          grid: { top: 24, right: 28, bottom: 32, left: 140 },
+          xAxis: {
+            type: "value",
+            name: "합산 비중 변화",
+            axisLabel: { color: theme === "dark" ? "#9aa4b2" : "#64748b", formatter: "{value}%p" },
+            splitLine: { lineStyle: { color: theme === "dark" ? "#272b32" : "#e2e8f0" } },
+          },
+          yAxis: {
+            type: "category",
+            data: rows.map((item) => item.asset_name),
+            axisLabel: { color: theme === "dark" ? "#9aa4b2" : "#64748b" },
+            axisLine: { lineStyle: { color: theme === "dark" ? "#343a43" : "#cbd5e1" } },
+          },
+          series: [
+            {
+              name: "합산 비중 변화",
+              type: "bar",
+              data: rows.map((item) => item.weight_delta),
+              itemStyle: {
+                color: (params: { value: number }) =>
+                  params.value >= 0 ? (theme === "dark" ? "#f87171" : "#dc2626") : theme === "dark" ? "#60a5fa" : "#2563eb",
+              },
+            },
+          ],
+        };
+      }
+
       const dates = pivot.data?.dates ?? [];
       const visibleRows = (pivot.data?.rows ?? []).slice(0, 8);
       const otherSeries = {
@@ -156,11 +228,15 @@ function App() {
         })),
       };
     },
-    [pivot.data, theme],
+    [analysisMode, crossEtfChanges.data, pivot.data, theme],
   );
 
   function submitChat(message: string) {
     if (!message.trim()) return;
+    if (message.includes("최근 3일") && message.includes("비중 변화")) {
+      setAnalysisMode("cross");
+      queryClient.invalidateQueries({ queryKey: ["cross-etf-weight-changes"] });
+    }
     setChatMessages((prev) => [...prev, message]);
     chat.mutate(message);
     setChatInput("");
@@ -192,6 +268,10 @@ function App() {
           <button onClick={() => collectRecentHoldings.mutate()}>
             <RefreshCw size={16} />
             최근 3영업일 수집
+          </button>
+          <button onClick={() => collectRecentWatchlist.mutate()}>
+            <RefreshCw size={16} />
+            대표 ETF 3영업일
           </button>
           <button
             className="icon-button"
@@ -241,6 +321,12 @@ function App() {
               <div className="canvas-subtitle">행/열/값/필터 축으로 구성종목 시계열을 재배치합니다</div>
             </div>
             <div className="canvas-actions">
+              <button className={analysisMode === "single" ? "mode-active" : ""} onClick={() => setAnalysisMode("single")}>
+                단일 ETF
+              </button>
+              <button className={analysisMode === "cross" ? "mode-active" : ""} onClick={() => setAnalysisMode("cross")}>
+                여러 ETF
+              </button>
               <span>자동 저장</span>
               <span>공유</span>
               <span>내보내기</span>
@@ -268,45 +354,83 @@ function App() {
               <div className="field-zone">
                 <Filter size={15} />
                 <span>필터</span>
-                <button>선택 ETF</button>
+                <button>{analysisMode === "single" ? "선택 ETF" : "대표 ETF 묶음"}</button>
                 <button>최근 3영업일</button>
               </div>
             </div>
             <div className="pivot-grid-wrap">
-              <table className="pivot-grid">
-                <thead>
-                  <tr>
-                    <th rowSpan={2}>종목명</th>
-                    <th rowSpan={2}>종목코드</th>
-                    <th colSpan={pivot.data?.dates.length || 1}>기준일별 비중</th>
-                    <th rowSpan={2}>변화량</th>
-                  </tr>
-                  <tr>
-                    {(pivot.data?.dates.length ? pivot.data.dates : ["데이터 없음"]).map((date) => (
-                      <th key={date}>{date}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(pivot.data?.rows ?? []).map((item) => (
-                    <tr key={`${item.asset_code}-${item.asset_name}`}>
-                      <td>{item.asset_name}</td>
-                      <td>{item.asset_code}</td>
-                      {(pivot.data?.dates ?? []).map((date) => (
-                        <td key={date}>{formatNumber(item.weights[date])}</td>
-                      ))}
-                      <td className={item.weight_delta >= 0 ? "positive" : "negative"}>{item.weight_delta.toFixed(2)}</td>
+              {analysisMode === "single" ? (
+                <table className="pivot-grid">
+                  <thead>
+                    <tr>
+                      <th rowSpan={2}>종목명</th>
+                      <th rowSpan={2}>종목코드</th>
+                      <th colSpan={pivot.data?.dates.length || 1}>기준일별 비중</th>
+                      <th rowSpan={2}>변화량</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                    <tr>
+                      {(pivot.data?.dates.length ? pivot.data.dates : ["데이터 없음"]).map((date) => (
+                        <th key={date}>{date}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(pivot.data?.rows ?? []).map((item) => (
+                      <tr key={`${item.asset_code}-${item.asset_name}`}>
+                        <td>{item.asset_name}</td>
+                        <td>{item.asset_code}</td>
+                        {(pivot.data?.dates ?? []).map((date) => (
+                          <td key={date}>{formatNumber(item.weights[date])}</td>
+                        ))}
+                        <td className={item.weight_delta >= 0 ? "positive" : "negative"}>{item.weight_delta.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="pivot-grid cross-grid">
+                  <thead>
+                    <tr>
+                      <th rowSpan={2}>종목명</th>
+                      <th rowSpan={2}>종목코드</th>
+                      <th rowSpan={2}>편입 ETF</th>
+                      <th colSpan={crossEtfChanges.data?.dates.length || 1}>여러 ETF 합산 비중</th>
+                      <th rowSpan={2}>변화량</th>
+                      <th rowSpan={2}>최근 노출</th>
+                    </tr>
+                    <tr>
+                      {(crossEtfChanges.data?.dates.length ? crossEtfChanges.data.dates : ["데이터 없음"]).map((date) => (
+                        <th key={date}>{date}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(crossEtfChanges.data?.rows ?? []).map((item) => (
+                      <tr key={`${item.asset_code}-${item.asset_name}`}>
+                        <td>{item.asset_name}</td>
+                        <td>{item.asset_code}</td>
+                        <td>{item.latest_etf_count}</td>
+                        {(crossEtfChanges.data?.dates ?? []).map((date) => (
+                          <td key={date}>{formatNumber(item.weights[date])}</td>
+                        ))}
+                        <td className={item.weight_delta >= 0 ? "positive" : "negative"}>{item.weight_delta.toFixed(2)}</td>
+                        <td>{formatExposures(item.latest_exposures)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </section>
 
           <section className="chart-panel canvas-section">
             <div className="section-heading">
               <h2>차트</h2>
-              <span>날짜별 구성 비중을 0~100% 축에 쌓아 보는 누적 그래프</span>
+              <span>
+                {analysisMode === "single"
+                  ? "날짜별 구성 비중을 0~100% 축에 쌓아 보는 누적 그래프"
+                  : "여러 ETF에 걸친 종목별 합산 비중 변화"}
+              </span>
             </div>
             <ReactECharts option={chartOption} style={{ height: "100%", minHeight: 420 }} />
           </section>
@@ -319,6 +443,11 @@ function App() {
 function formatNumber(value: number | null | undefined) {
   if (value === null || value === undefined) return "-";
   return value.toFixed(2);
+}
+
+function formatExposures(exposures: { etf_name: string; weight: number | null }[]) {
+  if (!exposures.length) return "-";
+  return exposures.map((item) => `${item.etf_name} ${formatNumber(item.weight)}%`).join(", ");
 }
 
 createRoot(document.getElementById("root")!).render(

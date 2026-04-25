@@ -161,6 +161,23 @@ select {
   font-size: 13px;
 }
 
+.canvas-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.canvas-actions .mode-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 760;
+}
+
 .canvas-section {
   min-width: 0;
   overflow: hidden;
@@ -338,8 +355,26 @@ th {
   min-width: 150px;
 }
 
+.cross-grid th:nth-child(3),
+.cross-grid td:nth-child(3) {
+  min-width: 90px;
+  text-align: right;
+}
+
+.cross-grid th:last-child,
+.cross-grid td:last-child {
+  min-width: 420px;
+  max-width: 620px;
+  white-space: nowrap;
+}
+
 .pivot-grid td:not(:first-child):not(:nth-child(2)) {
   text-align: right;
+}
+
+.cross-grid td:last-child {
+  color: var(--muted);
+  text-align: left;
 }
 
 .positive {

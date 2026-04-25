@@ -44,6 +44,20 @@ def get_etf_id(conn: sqlite3.Connection, ksd_fund: str) -> int | None:
     return int(row["etf_id"]) if row else None
 
 
+def snapshot_exists(conn: sqlite3.Connection, ksd_fund: str, base_date: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM etf_daily_snapshot s
+        JOIN etf e ON e.etf_id = s.etf_id
+        WHERE e.ksd_fund = ? AND s.base_date = ?
+        LIMIT 1
+        """,
+        (ksd_fund, base_date),
+    ).fetchone()
+    return row is not None
+
+
 def insert_holdings_snapshot(conn: sqlite3.Connection, snapshot: TigerHoldingsSnapshot) -> int:
     etf_id = get_etf_id(conn, snapshot.ksd_fund)
     if etf_id is None:
@@ -103,4 +117,3 @@ def insert_holdings(conn: sqlite3.Connection, snapshot_id: int, holdings: list[T
             for holding in holdings
         ],
     )
-

@@ -9,7 +9,7 @@ The first demo focuses on TIGER ETF data:
 3. Collect recent business-day snapshots when the user asks for a period such as "최근 3일".
 4. Store normalized snapshots and holdings in SQLite.
 5. Show holdings as an OLAP-like pivot matrix with dates as columns.
-6. Show weight deltas in the chart.
+6. Show each selected/changed holding as a line series over the date columns.
 7. Let an AI panel trigger predefined analyses.
 
 KODEX is the next provider target after TIGER collection is stable.

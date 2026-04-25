@@ -94,36 +94,54 @@ function App() {
   });
 
   const chartOption = useMemo(
-    () => ({
-      backgroundColor: "transparent",
-      textStyle: { color: theme === "dark" ? "#d7dde8" : "#334155" },
-      tooltip: {
-        trigger: "axis",
-        backgroundColor: theme === "dark" ? "#181b20" : "#ffffff",
-        borderColor: theme === "dark" ? "#343a43" : "#d9dee7",
-        textStyle: { color: theme === "dark" ? "#f8fafc" : "#0f172a" },
-      },
-      grid: { top: 24, right: 24, bottom: 32, left: 56 },
-      xAxis: {
-        type: "category",
-        data: (pivot.data?.rows ?? []).slice(0, 10).map((item) => item.asset_name),
-        axisLabel: { rotate: 35, color: theme === "dark" ? "#9aa4b2" : "#64748b" },
-        axisLine: { lineStyle: { color: theme === "dark" ? "#343a43" : "#cbd5e1" } },
-      },
-      yAxis: {
-        type: "value",
-        name: "비중 변화",
-        axisLabel: { color: theme === "dark" ? "#9aa4b2" : "#64748b" },
-        splitLine: { lineStyle: { color: theme === "dark" ? "#272b32" : "#e2e8f0" } },
-      },
-      series: [
-        {
-          type: "bar",
-          data: (pivot.data?.rows ?? []).slice(0, 10).map((item) => Number(item.weight_delta?.toFixed(2))),
-          itemStyle: { color: theme === "dark" ? "#63a7ff" : "#2563eb" },
+    () => {
+      const dates = pivot.data?.dates ?? [];
+      const rows = (pivot.data?.rows ?? []).slice(0, 6);
+      return {
+        backgroundColor: "transparent",
+        color:
+          theme === "dark"
+            ? ["#63a7ff", "#f97316", "#22c55e", "#e879f9", "#facc15", "#38bdf8"]
+            : ["#2563eb", "#ea580c", "#16a34a", "#c026d3", "#ca8a04", "#0891b2"],
+        textStyle: { color: theme === "dark" ? "#d7dde8" : "#334155" },
+        legend: {
+          type: "scroll",
+          top: 0,
+          right: 0,
+          textStyle: { color: theme === "dark" ? "#d7dde8" : "#334155" },
         },
-      ],
-    }),
+        tooltip: {
+          trigger: "axis",
+          backgroundColor: theme === "dark" ? "#181b20" : "#ffffff",
+          borderColor: theme === "dark" ? "#343a43" : "#d9dee7",
+          textStyle: { color: theme === "dark" ? "#f8fafc" : "#0f172a" },
+          valueFormatter: (value: number) => `${Number(value).toFixed(2)}%`,
+        },
+        grid: { top: 56, right: 24, bottom: 32, left: 56 },
+        xAxis: {
+          type: "category",
+          data: dates,
+          boundaryGap: false,
+          axisLabel: { color: theme === "dark" ? "#9aa4b2" : "#64748b" },
+          axisLine: { lineStyle: { color: theme === "dark" ? "#343a43" : "#cbd5e1" } },
+        },
+        yAxis: {
+          type: "value",
+          name: "비중(%)",
+          axisLabel: { color: theme === "dark" ? "#9aa4b2" : "#64748b", formatter: "{value}%" },
+          splitLine: { lineStyle: { color: theme === "dark" ? "#272b32" : "#e2e8f0" } },
+        },
+        series: rows.map((item) => ({
+          name: item.asset_name,
+          type: "line",
+          smooth: true,
+          symbolSize: 7,
+          data: dates.map((date) => item.weights[date] ?? null),
+          connectNulls: false,
+          emphasis: { focus: "series" },
+        })),
+      };
+    },
     [pivot.data, theme],
   );
 
@@ -275,7 +293,7 @@ function App() {
           <section className="chart-panel canvas-section">
             <div className="section-heading">
               <h2>차트</h2>
-              <span>최근 3영업일 기준 상위 10개 비중 변화</span>
+              <span>행의 종목들이 날짜 열을 따라 보인 비중 추이</span>
             </div>
             <ReactECharts option={chartOption} style={{ height: 320 }} />
           </section>

@@ -21,10 +21,8 @@ docs/      Design notes
 
 ```bash
 cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uv sync
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
 Useful endpoints:
@@ -51,4 +49,3 @@ The frontend expects the API at `http://localhost:8000` by default. Override wit
 ```bash
 VITE_API_BASE_URL=http://localhost:8000 npm run dev
 ```
-

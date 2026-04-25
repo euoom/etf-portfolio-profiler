@@ -14,9 +14,9 @@ tags: #저장소 #etf-portfolio-profiler
 ETF 포트폴리오 프로파일러의 데모 구현 저장소입니다. TIGER ETF 공개 Ajax 데이터를 먼저 수집하고, 일별 holdings 스냅샷을 SQLite에 쌓아 구성 비중 변화 분석을 제공합니다.
 
 ## 기술 스택 및 요구 사양
-- **런타임/엔진**: Python 3.12, Node.js 24
+- **런타임/엔진**: Python 3.11+, Node.js 24
 - **프레임워크**: FastAPI, Vite React
-- **사전 요구 사항**: 로컬 Python 가상환경, npm
+- **사전 요구 사항**: `uv`, npm
 
 ## 주요 기능
 - TIGER ETF 상품 목록 수집
@@ -35,10 +35,8 @@ ETF 포트폴리오 프로파일러의 데모 구현 저장소입니다. TIGER E
 ### 1. 백엔드
 ```bash
 cd repository/etf-portfolio-profiler/backend
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uv sync
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
 ### 2. 프론트엔드
@@ -54,4 +52,3 @@ npm run dev
 
 ## 라이선스
 - 미정
-

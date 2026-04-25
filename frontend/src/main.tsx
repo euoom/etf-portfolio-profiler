@@ -236,7 +236,10 @@ function App() {
 
         <section className="analysis-canvas">
           <div className="canvas-toolbar">
-            <div className="canvas-title">분석 캔버스</div>
+            <div>
+              <div className="canvas-title">OLAP 피벗 캔버스</div>
+              <div className="canvas-subtitle">행/열/값/필터 축으로 구성종목 시계열을 재배치합니다</div>
+            </div>
             <div className="canvas-actions">
               <span>자동 저장</span>
               <span>공유</span>
@@ -244,10 +247,6 @@ function App() {
             </div>
           </div>
           <section className="pivot-panel canvas-section">
-            <div className="section-heading">
-              <h2>OLAP 피벗 캔버스</h2>
-              <span>행/열/값/필터 축으로 구성종목 시계열을 재배치합니다</span>
-            </div>
             <div className="pivot-builder">
               <div className="field-zone">
                 <Rows3 size={15} />
@@ -309,7 +308,7 @@ function App() {
               <h2>차트</h2>
               <span>날짜별 구성 비중을 0~100% 축에 쌓아 보는 누적 그래프</span>
             </div>
-            <ReactECharts option={chartOption} style={{ height: 320 }} />
+            <ReactECharts option={chartOption} style={{ height: "100%", minHeight: 420 }} />
           </section>
         </section>
       </main>

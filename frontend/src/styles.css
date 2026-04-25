@@ -250,6 +250,51 @@ select {
   font-size: 13px;
 }
 
+.pivot-builder {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.field-zone {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px dashed var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-subtle);
+}
+
+.field-zone > span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.field-zone button {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.pivot-grid-wrap {
+  height: calc(100% - 104px);
+  min-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -267,9 +312,28 @@ td {
 th {
   position: sticky;
   top: 0;
+  z-index: 1;
   background: var(--surface-subtle);
   color: var(--muted);
   font-weight: 760;
+}
+
+.pivot-grid th {
+  text-align: center;
+}
+
+.pivot-grid th:first-child,
+.pivot-grid td:first-child {
+  min-width: 240px;
+}
+
+.pivot-grid th:nth-child(2),
+.pivot-grid td:nth-child(2) {
+  min-width: 150px;
+}
+
+.pivot-grid td:not(:first-child):not(:nth-child(2)) {
+  text-align: right;
 }
 
 .positive {
@@ -292,5 +356,8 @@ th {
   .workspace {
     grid-template-columns: 1fr;
   }
-}
 
+  .pivot-builder {
+    grid-template-columns: 1fr;
+  }
+}

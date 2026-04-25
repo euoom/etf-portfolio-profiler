@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import ReactECharts from "echarts-for-react";
-import { Bot, Database, Moon, RefreshCw, Send, Sun } from "lucide-react";
+import { Bot, Columns3, Database, Filter, Moon, RefreshCw, Rows3, Send, Sigma, Sun } from "lucide-react";
 import "./styles.css";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -16,14 +16,18 @@ type Etf = {
   category: string | null;
 };
 
-type WeightChange = {
+type PivotRow = {
   asset_code: string;
   asset_name: string;
-  start_date: string;
-  end_date: string;
-  start_weight: number | null;
-  end_weight: number | null;
+  weights: Record<string, number | null>;
+  quantities: Record<string, number | null>;
+  valuation_amounts: Record<string, number | null>;
   weight_delta: number;
+};
+
+type PivotResponse = {
+  dates: string[];
+  rows: PivotRow[];
 };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -55,9 +59,9 @@ function App() {
     queryFn: () => api<Etf[]>("/api/etfs"),
   });
 
-  const changes = useQuery({
-    queryKey: ["weight-changes", selectedFund],
-    queryFn: () => api<WeightChange[]>(`/api/analysis/weight-changes?ksd_fund=${selectedFund}&days=3`),
+  const pivot = useQuery({
+    queryKey: ["holdings-pivot", selectedFund],
+    queryFn: () => api<PivotResponse>(`/api/analysis/holdings-pivot?ksd_fund=${selectedFund}&days=3`),
   });
 
   const collectProducts = useMutation({
@@ -67,7 +71,16 @@ function App() {
 
   const collectHoldings = useMutation({
     mutationFn: () => api(`/api/collect/tiger/holdings/${selectedFund}`, { method: "POST" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weight-changes", selectedFund] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["holdings-pivot", selectedFund] });
+    },
+  });
+
+  const collectRecentHoldings = useMutation({
+    mutationFn: () => api(`/api/collect/tiger/holdings/${selectedFund}/recent?days=3`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["holdings-pivot", selectedFund] });
+    },
   });
 
   const chat = useMutation({
@@ -93,7 +106,7 @@ function App() {
       grid: { top: 24, right: 24, bottom: 32, left: 56 },
       xAxis: {
         type: "category",
-        data: (changes.data ?? []).slice(0, 10).map((item) => item.asset_name),
+        data: (pivot.data?.rows ?? []).slice(0, 10).map((item) => item.asset_name),
         axisLabel: { rotate: 35, color: theme === "dark" ? "#9aa4b2" : "#64748b" },
         axisLine: { lineStyle: { color: theme === "dark" ? "#343a43" : "#cbd5e1" } },
       },
@@ -106,12 +119,12 @@ function App() {
       series: [
         {
           type: "bar",
-          data: (changes.data ?? []).slice(0, 10).map((item) => Number(item.weight_delta?.toFixed(2))),
+          data: (pivot.data?.rows ?? []).slice(0, 10).map((item) => Number(item.weight_delta?.toFixed(2))),
           itemStyle: { color: theme === "dark" ? "#63a7ff" : "#2563eb" },
         },
       ],
     }),
-    [changes.data, theme],
+    [pivot.data, theme],
   );
 
   function submitChat(message: string) {
@@ -143,6 +156,10 @@ function App() {
           <button onClick={() => collectHoldings.mutate()}>
             <RefreshCw size={16} />
             구성종목 수집
+          </button>
+          <button onClick={() => collectRecentHoldings.mutate()}>
+            <RefreshCw size={16} />
+            최근 3영업일 수집
           </button>
           <button
             className="icon-button"
@@ -196,37 +213,69 @@ function App() {
           </div>
           <section className="pivot-panel canvas-section">
             <div className="section-heading">
-              <h2>피벗형 분석 표</h2>
-              <span>행: 종목명 / 열: 기준일 / 값: 비중 변화량 / 필터: 최근 3일</span>
+              <h2>OLAP 피벗 캔버스</h2>
+              <span>행/열/값/필터 축으로 구성종목 시계열을 재배치합니다</span>
             </div>
-            <table>
-              <thead>
-                <tr>
-                  <th>종목명</th>
-                  <th>종목코드</th>
-                  <th>시작 비중</th>
-                  <th>종료 비중</th>
-                  <th>변화량</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(changes.data ?? []).map((item) => (
-                  <tr key={`${item.asset_code}-${item.asset_name}`}>
-                    <td>{item.asset_name}</td>
-                    <td>{item.asset_code}</td>
-                    <td>{item.start_weight ?? "-"}</td>
-                    <td>{item.end_weight ?? "-"}</td>
-                    <td className={item.weight_delta >= 0 ? "positive" : "negative"}>{item.weight_delta?.toFixed(2)}</td>
+            <div className="pivot-builder">
+              <div className="field-zone">
+                <Rows3 size={15} />
+                <span>행</span>
+                <button>종목명</button>
+                <button>종목코드</button>
+              </div>
+              <div className="field-zone">
+                <Columns3 size={15} />
+                <span>열</span>
+                <button>기준일</button>
+              </div>
+              <div className="field-zone">
+                <Sigma size={15} />
+                <span>값</span>
+                <button>비중</button>
+                <button>비중 변화량</button>
+              </div>
+              <div className="field-zone">
+                <Filter size={15} />
+                <span>필터</span>
+                <button>선택 ETF</button>
+                <button>최근 3영업일</button>
+              </div>
+            </div>
+            <div className="pivot-grid-wrap">
+              <table className="pivot-grid">
+                <thead>
+                  <tr>
+                    <th rowSpan={2}>종목명</th>
+                    <th rowSpan={2}>종목코드</th>
+                    <th colSpan={pivot.data?.dates.length || 1}>기준일별 비중</th>
+                    <th rowSpan={2}>변화량</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                  <tr>
+                    {(pivot.data?.dates.length ? pivot.data.dates : ["데이터 없음"]).map((date) => (
+                      <th key={date}>{date}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(pivot.data?.rows ?? []).map((item) => (
+                    <tr key={`${item.asset_code}-${item.asset_name}`}>
+                      <td>{item.asset_name}</td>
+                      <td>{item.asset_code}</td>
+                      {(pivot.data?.dates ?? []).map((date) => (
+                        <td key={date}>{formatNumber(item.weights[date])}</td>
+                      ))}
+                      <td className={item.weight_delta >= 0 ? "positive" : "negative"}>{item.weight_delta.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <section className="chart-panel canvas-section">
             <div className="section-heading">
               <h2>차트</h2>
-              <span>상위 10개 비중 변화</span>
+              <span>최근 3영업일 기준 상위 10개 비중 변화</span>
             </div>
             <ReactECharts option={chartOption} style={{ height: 320 }} />
           </section>
@@ -234,6 +283,11 @@ function App() {
       </main>
     </div>
   );
+}
+
+function formatNumber(value: number | null | undefined) {
+  if (value === null || value === undefined) return "-";
+  return value.toFixed(2);
 }
 
 createRoot(document.getElementById("root")!).render(

@@ -1,7 +1,7 @@
 import hashlib
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import httpx
 from bs4 import BeautifulSoup
@@ -160,6 +160,27 @@ class TigerCollector:
             holdings=holdings,
         )
 
+    def fetch_recent_holdings_snapshots(
+        self,
+        ksd_fund: str,
+        days: int = 3,
+        prf_prd: str = "Week01",
+        order: str = "SRD",
+    ) -> list[TigerHoldingsSnapshot]:
+        latest_fix_date = self._fetch_default_fix_date(ksd_fund)
+        fix_dates = recent_weekdays(latest_fix_date, days)
+        snapshots: list[TigerHoldingsSnapshot] = []
+        for fix_date in fix_dates:
+            snapshot = self.fetch_holdings_snapshot(
+                ksd_fund=ksd_fund,
+                fix_date=fix_date,
+                prf_prd=prf_prd,
+                order=order,
+            )
+            if snapshot.holdings:
+                snapshots.append(snapshot)
+        return snapshots
+
     def _fetch_default_fix_date(self, ksd_fund: str) -> str:
         response = self._client.post(PDF_CONTAINER_URL, data={"ksdFund": ksd_fund, "fixDate": "", "prfPrd": "", "order": ""})
         response.raise_for_status()
@@ -220,3 +241,12 @@ class TigerCollector:
             )
         return holdings
 
+
+def recent_weekdays(latest_fix_date: str, days: int) -> list[str]:
+    current = datetime.strptime(latest_fix_date.replace("-", "."), "%Y.%m.%d").date()
+    dates: list[str] = []
+    while len(dates) < days:
+        if current.weekday() < 5:
+            dates.append(current.strftime("%Y.%m.%d"))
+        current -= timedelta(days=1)
+    return list(reversed(dates))

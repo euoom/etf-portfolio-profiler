@@ -31,8 +31,10 @@ Useful endpoints:
 GET  /health
 POST /api/collect/tiger/products
 POST /api/collect/tiger/holdings/{ksd_fund}
+POST /api/collect/tiger/holdings/{ksd_fund}/recent?days=3
 GET  /api/etfs
 GET  /api/analysis/weight-changes?ksd_fund=KR70183J0002&days=3
+GET  /api/analysis/holdings-pivot?ksd_fund=KR70183J0002&days=3
 POST /api/chat
 ```
 

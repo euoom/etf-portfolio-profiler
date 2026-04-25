@@ -96,7 +96,17 @@ function App() {
   const chartOption = useMemo(
     () => {
       const dates = pivot.data?.dates ?? [];
-      const rows = (pivot.data?.rows ?? []).slice(0, 6);
+      const visibleRows = (pivot.data?.rows ?? []).slice(0, 8);
+      const otherSeries = {
+        asset_name: "기타",
+        weights: Object.fromEntries(
+          dates.map((date) => {
+            const visibleSum = visibleRows.reduce((sum, item) => sum + (item.weights[date] ?? 0), 0);
+            return [date, Math.max(0, 100 - visibleSum)];
+          }),
+        ) as Record<string, number>,
+      };
+      const rows = visibleRows.length > 0 ? [...visibleRows, otherSeries] : [];
       return {
         backgroundColor: "transparent",
         color:
@@ -128,16 +138,20 @@ function App() {
         yAxis: {
           type: "value",
           name: "비중(%)",
+          min: 0,
+          max: 100,
           axisLabel: { color: theme === "dark" ? "#9aa4b2" : "#64748b", formatter: "{value}%" },
           splitLine: { lineStyle: { color: theme === "dark" ? "#272b32" : "#e2e8f0" } },
         },
         series: rows.map((item) => ({
           name: item.asset_name,
           type: "line",
+          stack: "holdings-weight",
+          areaStyle: { opacity: 0.35 },
           smooth: true,
           symbolSize: 7,
-          data: dates.map((date) => item.weights[date] ?? null),
-          connectNulls: false,
+          data: dates.map((date) => item.weights[date] ?? 0),
+          connectNulls: true,
           emphasis: { focus: "series" },
         })),
       };
@@ -293,7 +307,7 @@ function App() {
           <section className="chart-panel canvas-section">
             <div className="section-heading">
               <h2>차트</h2>
-              <span>행의 종목들이 날짜 열을 따라 보인 비중 추이</span>
+              <span>날짜별 구성 비중을 0~100% 축에 쌓아 보는 누적 그래프</span>
             </div>
             <ReactECharts option={chartOption} style={{ height: 320 }} />
           </section>

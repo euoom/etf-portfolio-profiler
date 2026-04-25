@@ -252,6 +252,7 @@ def etf_change_summary(conn: sqlite3.Connection, days: int = 3, limit: int = 100
         summary = {
             "ksd_fund": ksd_fund,
             "etf_name": etf_name,
+            "change_score": 0,
             "max_quantity_increase": None,
             "max_quantity_decrease": None,
             "max_weight_increase": None,
@@ -292,16 +293,34 @@ def etf_change_summary(conn: sqlite3.Connection, days: int = 3, limit: int = 100
 
         summaries.append(summary)
 
-    summaries.sort(
-        key=lambda item: max(
-            abs((item["max_quantity_increase"] or {}).get("value") or 0),
-            abs((item["max_quantity_decrease"] or {}).get("value") or 0),
-            abs((item["max_weight_increase"] or {}).get("value") or 0),
-            abs((item["max_weight_decrease"] or {}).get("value") or 0),
-        ),
-        reverse=True,
-    )
+    _apply_change_scores(summaries)
+    summaries.sort(key=lambda item: item["change_score"], reverse=True)
     return {"dates": dates, "rows": summaries[:limit]}
+
+
+def _apply_change_scores(summaries: list[dict]) -> None:
+    metric_keys = [
+        "max_quantity_increase",
+        "max_quantity_decrease",
+        "max_weight_increase",
+        "max_weight_decrease",
+    ]
+    max_by_metric = {
+        key: max((abs((summary[key] or {}).get("value") or 0) for summary in summaries), default=0)
+        for key in metric_keys
+    }
+
+    for summary in summaries:
+        score = 0.0
+        active_metrics = 0
+        for key in metric_keys:
+            metric_max = max_by_metric[key]
+            if metric_max == 0:
+                continue
+            value = abs((summary[key] or {}).get("value") or 0)
+            score += value / metric_max
+            active_metrics += 1
+        summary["change_score"] = round((score / active_metrics) * 100, 2) if active_metrics else 0
 
 
 def _assign_extreme(

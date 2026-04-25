@@ -50,6 +50,7 @@ type ExtremeChange = {
 type EtfChangeSummaryRow = {
   ksd_fund: string;
   etf_name: string;
+  change_score: number;
   max_quantity_increase: ExtremeChange | null;
   max_quantity_decrease: ExtremeChange | null;
   max_weight_increase: ExtremeChange | null;
@@ -395,6 +396,7 @@ function App() {
                   <thead>
                     <tr>
                       <th>ETF 이름</th>
+                      <th>변동 점수</th>
                       <th>최대 수량비율 증가</th>
                       <th>최대 수량비율 감소</th>
                       <th>최대 비중 증가</th>
@@ -415,6 +417,7 @@ function App() {
                             {item.etf_name}
                           </button>
                         </td>
+                        <td>{item.change_score.toFixed(2)}</td>
                         <td>{formatExtreme(item.max_quantity_increase, "%")}</td>
                         <td>{formatExtreme(item.max_quantity_decrease, "%")}</td>
                         <td>{formatExtreme(item.max_weight_increase, "%p")}</td>

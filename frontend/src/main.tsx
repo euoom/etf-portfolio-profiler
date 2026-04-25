@@ -496,7 +496,7 @@ function App() {
                     : "여러 ETF에 걸친 종목별 합산 비중 변화"}
               </span>
             </div>
-            <ReactECharts option={chartOption} style={{ height: "100%", minHeight: 420 }} />
+            <ReactECharts key={analysisMode} notMerge option={chartOption} style={{ height: "100%", minHeight: 420 }} />
           </section>
         </section>
 

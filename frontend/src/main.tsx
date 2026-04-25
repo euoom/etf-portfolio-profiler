@@ -8,14 +8,6 @@ import "./styles.css";
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const queryClient = new QueryClient();
 
-type Etf = {
-  ksd_fund: string;
-  ticker: string | null;
-  name: string;
-  brand: string;
-  category: string | null;
-};
-
 type PivotRow = {
   asset_code: string;
   asset_name: string;
@@ -95,11 +87,6 @@ function App() {
     localStorage.setItem("theme", theme);
   }, [theme]);
 
-  const etfs = useQuery({
-    queryKey: ["etfs"],
-    queryFn: () => api<Etf[]>("/api/etfs"),
-  });
-
   const pivot = useQuery({
     queryKey: ["holdings-pivot", selectedFund, periodDays],
     queryFn: () => api<PivotResponse>(`/api/analysis/holdings-pivot?ksd_fund=${selectedFund}&days=${periodDays}`),
@@ -117,7 +104,7 @@ function App() {
 
   const collectProducts = useMutation({
     mutationFn: () => api<{ collected: number }>("/api/collect/tiger/products", { method: "POST" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["etfs"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["etf-change-summary"] }),
   });
 
   const collectHoldings = useMutation({
@@ -323,14 +310,6 @@ function App() {
           <h1>ETF Portfolio Profiler</h1>
         </div>
         <div className="toolbar">
-          <select value={selectedFund} onChange={(event) => setSelectedFund(event.target.value)}>
-            <option value="KR70183J0002">KR70183J0002</option>
-            {(etfs.data ?? []).map((etf) => (
-              <option key={etf.ksd_fund} value={etf.ksd_fund}>
-                {etf.name}
-              </option>
-            ))}
-          </select>
           <select value={periodDays} onChange={(event) => setPeriodDays(Number(event.target.value))}>
             <option value={3}>최근 3영업일</option>
             <option value={5}>최근 5영업일</option>

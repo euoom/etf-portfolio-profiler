@@ -370,7 +370,6 @@ function App() {
                 <Rows3 size={15} />
                 <span>행</span>
                 <button>{analysisMode === "list" ? "ETF 이름" : "종목명"}</button>
-                {analysisMode !== "list" && <button>종목코드</button>}
               </div>
               <div className="field-zone">
                 <Columns3 size={15} />
@@ -431,7 +430,6 @@ function App() {
                   <thead>
                     <tr>
                       <th rowSpan={2}>종목명</th>
-                      <th rowSpan={2}>종목코드</th>
                       <th colSpan={pivot.data?.dates.length || 1}>기준일별 비중</th>
                       <th rowSpan={2}>변화량</th>
                     </tr>
@@ -445,7 +443,6 @@ function App() {
                     {(pivot.data?.rows ?? []).map((item) => (
                       <tr key={`${item.asset_code}-${item.asset_name}`}>
                         <td>{item.asset_name}</td>
-                        <td>{item.asset_code}</td>
                         {(pivot.data?.dates ?? []).map((date) => (
                           <td key={date}>{formatNumber(item.weights[date])}</td>
                         ))}
@@ -459,7 +456,6 @@ function App() {
                   <thead>
                     <tr>
                       <th rowSpan={2}>종목명</th>
-                      <th rowSpan={2}>종목코드</th>
                       <th rowSpan={2}>편입 ETF</th>
                       <th colSpan={crossEtfChanges.data?.dates.length || 1}>여러 ETF 합산 비중</th>
                       <th rowSpan={2}>변화량</th>
@@ -475,7 +471,6 @@ function App() {
                     {(crossEtfChanges.data?.rows ?? []).map((item) => (
                       <tr key={`${item.asset_code}-${item.asset_name}`}>
                         <td>{item.asset_name}</td>
-                        <td>{item.asset_code}</td>
                         <td>{item.latest_etf_count}</td>
                         {(crossEtfChanges.data?.dates ?? []).map((date) => (
                           <td key={date}>{formatNumber(item.weights[date])}</td>

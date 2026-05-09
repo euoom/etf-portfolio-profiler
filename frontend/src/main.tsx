@@ -5,7 +5,7 @@ import ReactECharts from "echarts-for-react";
 import { Bot, Columns3, Database, Filter, Moon, RefreshCw, Rows3, Send, Sigma, Sun } from "lucide-react";
 import "./styles.css";
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 const queryClient = new QueryClient();
 
 type PivotRow = {

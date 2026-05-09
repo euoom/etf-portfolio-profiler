@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+import httpx
 from fastapi import APIRouter, HTTPException
 
 from app.db.database import get_connection
@@ -157,8 +158,15 @@ def get_etf_change_summary(days: int = 3, limit: int = 100) -> dict:
 
 @router.post("/chat")
 def chat(request: ChatRequest) -> dict:
-    provider = get_provider()
-    response = provider.chat(request.message)
+    try:
+        provider = get_provider()
+        response = provider.chat(request.message)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=exc.response.text) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {
         "provider": response.provider,
         "message": response.content,

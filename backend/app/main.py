@@ -31,9 +31,25 @@ app.include_router(router, prefix="/api")
 
 
 def run() -> None:
+    import argparse
+
     import uvicorn
 
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    parser = argparse.ArgumentParser(description="Run the ETF Portfolio Profiler API server.")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--reload", dest="reload", action="store_true", default=True)
+    parser.add_argument("--no-reload", dest="reload", action="store_false")
+    parser.add_argument("--log-level", default="info")
+    args = parser.parse_args()
+
+    uvicorn.run(
+        "app.main:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level=args.log_level,
+    )
 
 
 if __name__ == "__main__":

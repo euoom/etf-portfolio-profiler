@@ -63,7 +63,10 @@ type EtfChangeSummaryResponse = {
 };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, init);
+  const headers = new Headers(init?.headers);
+  headers.set("ngrok-skip-browser-warning", "true");
+
+  const response = await fetch(`${apiBaseUrl}${path}`, { ...init, headers });
   if (!response.ok) {
     throw new Error(await response.text());
   }

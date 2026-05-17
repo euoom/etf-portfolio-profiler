@@ -1,6 +1,32 @@
 import sqlite3
 
 
+def _date_filter_sql(
+    date_column: str = "base_date",
+    *,
+    start_date: str | None,
+    end_date: str | None,
+    days: int,
+) -> tuple[str, tuple]:
+    if start_date and end_date:
+        return f"{date_column} BETWEEN ? AND ?", (start_date, end_date)
+    if start_date:
+        return f"{date_column} >= ?", (start_date,)
+    if end_date:
+        return f"{date_column} <= ?", (end_date,)
+    return (
+        f"""
+        {date_column} IN (
+            SELECT DISTINCT base_date
+            FROM etf_daily_snapshot
+            ORDER BY base_date DESC
+            LIMIT ?
+        )
+        """,
+        (days,),
+    )
+
+
 def list_etfs(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         """
@@ -51,18 +77,38 @@ def weight_changes(conn: sqlite3.Connection, ksd_fund: str, days: int = 3) -> li
     return [dict(row) for row in rows]
 
 
-def holdings_pivot(conn: sqlite3.Connection, ksd_fund: str, days: int = 3) -> dict:
-    date_rows = conn.execute(
-        """
-        SELECT DISTINCT s.base_date
-        FROM etf_daily_snapshot s
-        JOIN etf e ON e.etf_id = s.etf_id
-        WHERE e.ksd_fund = ?
-        ORDER BY s.base_date DESC
-        LIMIT ?
-        """,
-        (ksd_fund, days),
-    ).fetchall()
+def holdings_pivot(
+    conn: sqlite3.Connection,
+    ksd_fund: str,
+    days: int = 3,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
+    if start_date or end_date:
+        filter_sql, filter_params = _date_filter_sql("s.base_date", start_date=start_date, end_date=end_date, days=days)
+        date_rows = conn.execute(
+            f"""
+            SELECT DISTINCT s.base_date
+            FROM etf_daily_snapshot s
+            JOIN etf e ON e.etf_id = s.etf_id
+            WHERE e.ksd_fund = ?
+              AND {filter_sql}
+            ORDER BY s.base_date DESC
+            """,
+            (ksd_fund, *filter_params),
+        ).fetchall()
+    else:
+        date_rows = conn.execute(
+            """
+            SELECT DISTINCT s.base_date
+            FROM etf_daily_snapshot s
+            JOIN etf e ON e.etf_id = s.etf_id
+            WHERE e.ksd_fund = ?
+            ORDER BY s.base_date DESC
+            LIMIT ?
+            """,
+            (ksd_fund, days),
+        ).fetchall()
     dates = sorted(row["base_date"] for row in date_rows)
     if not dates:
         return {"dates": [], "rows": []}
@@ -111,15 +157,22 @@ def holdings_pivot(conn: sqlite3.Connection, ksd_fund: str, days: int = 3) -> di
     return {"dates": dates, "rows": pivot_rows}
 
 
-def cross_etf_weight_changes(conn: sqlite3.Connection, days: int = 3, limit: int = 40) -> dict:
+def cross_etf_weight_changes(
+    conn: sqlite3.Connection,
+    days: int = 3,
+    limit: int = 40,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
+    filter_sql, filter_params = _date_filter_sql("base_date", start_date=start_date, end_date=end_date, days=days)
     date_rows = conn.execute(
-        """
+        f"""
         SELECT DISTINCT base_date
         FROM etf_daily_snapshot
+        WHERE {filter_sql}
         ORDER BY base_date DESC
-        LIMIT ?
         """,
-        (days,),
+        filter_params,
     ).fetchall()
     dates = sorted(row["base_date"] for row in date_rows)
     if not dates:
@@ -216,35 +269,63 @@ def cross_etf_weight_changes(conn: sqlite3.Connection, days: int = 3, limit: int
     return {"dates": dates, "rows": change_rows[:limit]}
 
 
-def etf_change_summary(conn: sqlite3.Connection, days: int = 3, limit: int = 100) -> dict:
+def etf_change_summary(
+    conn: sqlite3.Connection,
+    days: int = 3,
+    limit: int = 100,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
+    date_filter = ""
+    params: tuple = (days,)
+    if start_date and end_date:
+        date_filter = "WHERE base_date BETWEEN ? AND ?"
+        params = (start_date, end_date)
+    elif start_date:
+        date_filter = "WHERE base_date >= ?"
+        params = (start_date,)
+    elif end_date:
+        date_filter = "WHERE base_date <= ?"
+        params = (end_date,)
+
     rows = conn.execute(
-        """
+        f"""
+        WITH ranked_snapshots AS (
+            SELECT
+                snapshot_id,
+                etf_id,
+                base_date,
+                DENSE_RANK() OVER (
+                    PARTITION BY etf_id
+                    ORDER BY base_date DESC
+                ) AS date_rank
+            FROM etf_daily_snapshot
+            {date_filter}
+        )
         SELECT
             e.ksd_fund,
             e.name AS etf_name,
             h.asset_code,
             h.asset_name,
-            s.base_date,
+            rs.base_date,
             h.quantity,
+            h.valuation_amount,
             h.weight
         FROM etf_daily_holding h
-        JOIN etf_daily_snapshot s ON s.snapshot_id = h.snapshot_id
-        JOIN etf e ON e.etf_id = s.etf_id
-        WHERE s.base_date IN (
-            SELECT DISTINCT base_date
-            FROM etf_daily_snapshot
-            ORDER BY base_date DESC
-            LIMIT ?
-        )
-        ORDER BY e.name, h.asset_name, s.base_date
+        JOIN ranked_snapshots rs ON rs.snapshot_id = h.snapshot_id
+        JOIN etf e ON e.etf_id = rs.etf_id
+        WHERE rs.date_rank <= ?
+        ORDER BY e.name, h.asset_name, rs.base_date
         """,
-        (days,),
+        (*params, days) if date_filter else params,
     ).fetchall()
 
     dates = sorted({row["base_date"] for row in rows})
+    dates_by_etf: dict[tuple[str, str], set[str]] = {}
     by_etf: dict[tuple[str, str], dict[tuple[str, str], dict]] = {}
     for row in rows:
         etf_key = (row["ksd_fund"], row["etf_name"])
+        dates_by_etf.setdefault(etf_key, set()).add(row["base_date"])
         asset_key = (row["asset_code"], row["asset_name"])
         item = by_etf.setdefault(etf_key, {}).setdefault(
             asset_key,
@@ -252,25 +333,35 @@ def etf_change_summary(conn: sqlite3.Connection, days: int = 3, limit: int = 100
                 "asset_code": row["asset_code"],
                 "asset_name": row["asset_name"],
                 "quantities": {},
+                "valuation_amounts": {},
                 "weights": {},
             },
         )
         item["quantities"][row["base_date"]] = row["quantity"]
+        item["valuation_amounts"][row["base_date"]] = row["valuation_amount"]
         item["weights"][row["base_date"]] = row["weight"]
 
     summaries = []
     if not dates:
         return {"dates": [], "rows": []}
 
-    start_date = dates[0]
-    end_date = dates[-1]
     for (ksd_fund, etf_name), assets in by_etf.items():
+        etf_dates = sorted(dates_by_etf.get((ksd_fund, etf_name), set()))
+        if not etf_dates:
+            continue
+        start_date = etf_dates[0]
+        end_date = etf_dates[-1]
         summary = {
             "ksd_fund": ksd_fund,
             "etf_name": etf_name,
             "change_score": 0,
             "max_quantity_increase": None,
             "max_quantity_decrease": None,
+            "max_valuation_amount": None,
+            "max_valuation_increase": None,
+            "max_valuation_decrease": None,
+            "max_valuation_pct_increase": None,
+            "max_valuation_pct_decrease": None,
             "max_weight_increase": None,
             "max_weight_decrease": None,
         }
@@ -285,6 +376,14 @@ def etf_change_summary(conn: sqlite3.Connection, days: int = 3, limit: int = 100
             start_weight = asset["weights"].get(start_date) or 0
             end_weight = asset["weights"].get(end_date) or 0
             weight_delta = end_weight - start_weight
+            start_valuation = asset["valuation_amounts"].get(start_date)
+            end_valuation = asset["valuation_amounts"].get(end_date)
+            valuation_delta = None
+            valuation_change_pct = None
+            if start_valuation is not None and end_valuation is not None:
+                valuation_delta = end_valuation - start_valuation
+                if start_valuation != 0:
+                    valuation_change_pct = (valuation_delta / abs(start_valuation)) * 100
 
             _assign_extreme(
                 summary,
@@ -306,6 +405,11 @@ def etf_change_summary(conn: sqlite3.Connection, days: int = 3, limit: int = 100
             )
             _assign_extreme(summary, "max_weight_increase", weight_delta, asset, start_weight, end_weight, larger=True)
             _assign_extreme(summary, "max_weight_decrease", weight_delta, asset, start_weight, end_weight, larger=False)
+            _assign_extreme(summary, "max_valuation_amount", end_valuation, asset, start_valuation, end_valuation, larger=True)
+            _assign_extreme(summary, "max_valuation_increase", valuation_delta, asset, start_valuation, end_valuation, larger=True)
+            _assign_extreme(summary, "max_valuation_decrease", valuation_delta, asset, start_valuation, end_valuation, larger=False)
+            _assign_extreme(summary, "max_valuation_pct_increase", valuation_change_pct, asset, start_valuation, end_valuation, larger=True)
+            _assign_extreme(summary, "max_valuation_pct_decrease", valuation_change_pct, asset, start_valuation, end_valuation, larger=False)
 
         summaries.append(summary)
 

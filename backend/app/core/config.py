@@ -37,7 +37,7 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock").strip().lower()
 LOCAL_LLM_COMMAND = os.getenv("LOCAL_LLM_COMMAND", "").strip()
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
 NVIDIA_BASE_URL = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").rstrip("/")
-NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "mistralai/mistral-large-3-675b-instruct-2512").strip()
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "minimaxai/minimax-m2.7").strip()
 
 TIGER_BASE_URL = "https://investments.miraeasset.com"
 TIGER_CONTEXT = "/tigeretf"

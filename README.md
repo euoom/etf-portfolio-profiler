@@ -25,6 +25,18 @@ uv sync
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
+Run the local backend and the configured ngrok tunnel together:
+
+```bash
+./scripts/dev-tunnel.sh
+```
+
+Optional environment overrides:
+
+```bash
+PORT=8010 NGROK_TUNNEL=etf-portfolio-profiler-api ./scripts/dev-tunnel.sh
+```
+
 Useful endpoints:
 
 ```text
@@ -50,4 +62,18 @@ The frontend expects the API at `http://localhost:8000` by default. Override wit
 
 ```bash
 VITE_API_BASE_URL=http://localhost:8000 npm run dev
+```
+
+Manual collection controls are hidden by default. Enable them for local development with:
+
+```bash
+VITE_SHOW_DEV_TOOLS=true npm run dev
+```
+
+Useful routes:
+
+```text
+/#/                         ETF change list
+/#/cross                    Cross-ETF asset view
+/#/etf/{ksd_fund}           ETF detail view
 ```

@@ -133,6 +133,8 @@ def cross_etf_weight_changes(conn: sqlite3.Connection, days: int = 3, limit: int
             h.asset_name,
             s.base_date,
             SUM(COALESCE(h.weight, 0)) AS total_weight,
+            SUM(COALESCE(h.quantity, 0)) AS total_quantity,
+            SUM(COALESCE(h.valuation_amount, 0)) AS total_valuation_amount,
             COUNT(DISTINCT e.etf_id) AS etf_count
         FROM etf_daily_holding h
         JOIN etf_daily_snapshot s ON s.snapshot_id = h.snapshot_id
@@ -169,11 +171,15 @@ def cross_etf_weight_changes(conn: sqlite3.Connection, days: int = 3, limit: int
                 "asset_code": row["asset_code"],
                 "asset_name": row["asset_name"],
                 "weights": {base_date: 0 for base_date in dates},
+                "quantities": {base_date: 0 for base_date in dates},
+                "valuation_amounts": {base_date: 0 for base_date in dates},
                 "etf_counts": {base_date: 0 for base_date in dates},
                 "latest_exposures": [],
             },
         )
         item["weights"][row["base_date"]] = row["total_weight"]
+        item["quantities"][row["base_date"]] = row["total_quantity"]
+        item["valuation_amounts"][row["base_date"]] = row["total_valuation_amount"]
         item["etf_counts"][row["base_date"]] = row["etf_count"]
 
     for row in exposure_rows:
@@ -190,9 +196,19 @@ def cross_etf_weight_changes(conn: sqlite3.Connection, days: int = 3, limit: int
     for item in by_asset.values():
         start_weight = item["weights"].get(start_date) or 0
         end_weight = item["weights"].get(end_date) or 0
+        start_quantity = item["quantities"].get(start_date) or 0
+        end_quantity = item["quantities"].get(end_date) or 0
+        start_valuation_amount = item["valuation_amounts"].get(start_date) or 0
+        end_valuation_amount = item["valuation_amounts"].get(end_date) or 0
         item["start_weight"] = start_weight
         item["end_weight"] = end_weight
         item["weight_delta"] = end_weight - start_weight
+        item["start_quantity"] = start_quantity
+        item["end_quantity"] = end_quantity
+        item["quantity_delta"] = end_quantity - start_quantity
+        item["start_valuation_amount"] = start_valuation_amount
+        item["end_valuation_amount"] = end_valuation_amount
+        item["valuation_amount_delta"] = end_valuation_amount - start_valuation_amount
         item["latest_etf_count"] = item["etf_counts"].get(end_date) or 0
         change_rows.append(item)
 

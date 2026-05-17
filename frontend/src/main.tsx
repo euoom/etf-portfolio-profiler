@@ -734,11 +734,11 @@ function App() {
                           </th>
                         )}
                         <th>ETF 이름</th>
-                        <th>변동 점수</th>
-                        <th>최대 수량비율 증가</th>
-                        <th>최대 수량비율 감소</th>
-                        <th>최대 비중 증가</th>
-                        <th>최대 비중 감소</th>
+                        <th className="score-cell">변동점수</th>
+                        <th>수량 증가율</th>
+                        <th>수량 감소율</th>
+                        <th>비중 증가</th>
+                        <th>비중 감소</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -762,7 +762,7 @@ function App() {
                               {item.etf_name}
                             </button>
                           </td>
-                          <td>{item.change_score.toFixed(2)}</td>
+                          <td className="score-cell">{item.change_score.toFixed(2)}</td>
                           <ExtremeCell change={item.max_quantity_increase} suffix="%" />
                           <ExtremeCell change={item.max_quantity_decrease} suffix="%" />
                           <ExtremeCell change={item.max_weight_increase} suffix="%p" />
@@ -873,16 +873,16 @@ function App() {
               {analysisMode === "list" ? (
                 <select value={etfChartMetric} onChange={(event) => setEtfChartMetric(event.target.value as EtfChartMetric)}>
                   <option value="change_score">종합점수</option>
-                  <option value="quantity">종목수량</option>
+                  <option value="quantity">수량 변화</option>
                   <option value="valuation">금액</option>
                   <option value="weight">ETF 내 비중</option>
                 </select>
               ) : analysisMode === "single" ? (
                 <select value={detailChartMetric} onChange={(event) => setDetailChartMetric(event.target.value as DetailChartMetric)}>
                   <optgroup label="주식 수량 기준">
-                    <option value="quantity">주식 수량별</option>
-                    <option value="quantity_delta">주식 수량 변화량</option>
-                    <option value="quantity_delta_ratio">주식 수량 변화율</option>
+                    <option value="quantity">수량별</option>
+                    <option value="quantity_delta">수량 변화량</option>
+                    <option value="quantity_delta_ratio">수량 변화율</option>
                   </optgroup>
                   <optgroup label="금액 기준">
                     <option value="valuation_amount">금액별</option>
@@ -1530,9 +1530,9 @@ function buildDetailSummaryExportRows(rows: PivotRow[], dates: string[]) {
 
 function getDetailChartLabel(metric: DetailChartMetric) {
   const labels: Record<DetailChartMetric, string> = {
-    quantity: "주식 수량별",
-    quantity_delta: "주식 수량 변화량",
-    quantity_delta_ratio: "주식 수량 변화율",
+    quantity: "수량별",
+    quantity_delta: "수량 변화량",
+    quantity_delta_ratio: "수량 변화율",
     valuation_amount: "금액별",
     valuation_weight: "비중별",
     valuation_delta: "금액 변화량",

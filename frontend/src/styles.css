@@ -19,6 +19,15 @@ input[type="checkbox"] {
   height: 16px;
   accent-color: var(--accent);
   cursor: pointer;
+  vertical-align: middle;
+}
+
+/* 테이블 select-column 안의 체크박스: 행 높이 변동 방지 */
+.select-column input[type="checkbox"] {
+  display: block;
+  width: 13px;
+  height: 13px;
+  margin: 0 auto;
 }
 
 button:disabled {
@@ -555,13 +564,24 @@ th {
 
 .summary-grid th:first-child,
 .summary-grid td:first-child {
-  min-width: 260px;
+  width: 1%;
+  min-width: 0;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.summary-grid th:first-child {
+  text-align: center;
 }
 
 .summary-grid th:not(:first-child),
 .summary-grid td:not(:first-child) {
   min-width: 220px;
   text-align: left;
+}
+
+.summary-grid th:not(:first-child) {
+  text-align: center;
 }
 
 .summary-grid th.select-column,
@@ -576,7 +596,10 @@ th {
 
 .summary-grid.with-selection th:nth-child(2),
 .summary-grid.with-selection td:nth-child(2) {
-  min-width: 260px;
+  width: 1%;
+  min-width: 0;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .summary-grid.with-selection th:nth-child(2) {
@@ -593,12 +616,52 @@ th {
   text-align: left;
 }
 
+.summary-grid.with-selection th:nth-child(n + 3) {
+  text-align: center;
+}
+
 .change-cell {
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
   max-width: 100%;
   min-width: 0;
+}
+
+/* 숫자 값 부분: 고정폭 + 우측 정렬로 자릿수 기준 맞춤 */
+.change-cell > :first-child {
+  display: inline-block;
+  min-width: 80px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 변동 점수 컬럼: td.score-cell/th.score-cell로 특이성 강화 */
+.summary-grid td.score-cell,
+.summary-grid th.score-cell {
+  width: 1%;
+  min-width: 84px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.summary-grid th.score-cell {
+  text-align: center;
+}
+
+/* 선택 모드: with-selection의 nth-child(n+3) 규칙(특이성 0,3,1)을 이겨야 함 */
+.summary-grid.with-selection td.score-cell,
+.summary-grid.with-selection th.score-cell {
+  width: 1%;
+  min-width: 84px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.summary-grid.with-selection th.score-cell {
+  text-align: center;
 }
 
 .change-cell-divider {
@@ -632,6 +695,7 @@ th {
 
 .empty-cell {
   color: var(--muted);
+  text-align: center !important;
 }
 
 .text-link {

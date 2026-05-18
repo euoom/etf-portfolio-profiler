@@ -1,0 +1,37 @@
+name: Probe TIGER Access
+
+on:
+  pull_request:
+    branches: ["master"]
+    paths:
+      - ".github/workflows/probe-tiger-access.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe TIGER endpoint access
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show runner network identity
+        run: |
+          set -x
+          curl -fsS https://api.ipify.org
+          echo
+
+      - name: Probe TIGER host
+        run: |
+          set -x
+          curl -i -L --max-time 20 https://investments.miraeasset.com/ | sed -n '1,40p'
+
+      - name: Probe TIGER product list endpoint
+        run: |
+          set -x
+          curl -i -L --max-time 20 \
+            -A "Mozilla/5.0 ETF Portfolio Profiler Probe" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data "pdfNameYn=N&pageIndex=1&firstIndex=0&listCnt=1&periodType=short&listType=table&etfTemaCode=&cateNameYn=N&inCateNationNot=&inCateFundNot=&q=&prfPrd=1w" \
+            https://investments.miraeasset.com/tigeretf/ko/product/search/list.ajax \
+            | sed -n '1,80p'

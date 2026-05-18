@@ -61,10 +61,10 @@ def _collect_missing_recent_holdings(ksd_fund: str, days: int) -> dict:
 
 
 @router.post("/collect/tiger/products")
-def collect_tiger_products() -> dict:
+def collect_tiger_products(list_count: int = 2000) -> dict:
     collector = TigerCollector()
     try:
-        products = collector.fetch_products()
+        products = collector.fetch_products(list_count=list_count)
     finally:
         collector.close()
     with get_connection() as conn:

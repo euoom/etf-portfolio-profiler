@@ -11,3 +11,4 @@ dist/
 .vite/
 coverage/
 *.tsbuildinfo
+*.log

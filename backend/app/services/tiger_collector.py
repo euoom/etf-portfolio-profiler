@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 import httpx
+import exchange_calendars as xcals
 from bs4 import BeautifulSoup
 
 from app.core.config import TIGER_BASE_URL
@@ -12,6 +13,7 @@ from app.core.config import TIGER_BASE_URL
 LIST_URL = f"{TIGER_BASE_URL}/tigeretf/ko/product/search/list.ajax"
 PDF_CONTAINER_URL = f"{TIGER_BASE_URL}/tigeretf/ko/product/search/detail/pdf.ajax"
 PDF_LIST_URL = f"{TIGER_BASE_URL}/tigeretf/ko/product/search/detail/pdfListAjax.ajax"
+KRX_CALENDAR = xcals.get_calendar("XKRX")
 
 
 def _clean_text(value: str) -> str:
@@ -246,10 +248,15 @@ class TigerCollector:
 
 
 def recent_weekdays(latest_fix_date: str, days: int) -> list[str]:
-    current = datetime.strptime(latest_fix_date.replace("-", "."), "%Y.%m.%d").date()
-    dates: list[str] = []
-    while len(dates) < days:
-        if current.weekday() < 5:
-            dates.append(current.strftime("%Y.%m.%d"))
-        current -= timedelta(days=1)
-    return list(reversed(dates))
+    if days <= 0:
+        return []
+
+    end_date = datetime.strptime(latest_fix_date.replace("-", "."), "%Y.%m.%d").date()
+    lookback_days = max(days * 3, 14)
+
+    while True:
+        start_date = end_date - timedelta(days=lookback_days)
+        sessions = KRX_CALENDAR.sessions_in_range(start_date.isoformat(), end_date.isoformat())
+        if len(sessions) >= days or lookback_days > 370:
+            return [session.strftime("%Y.%m.%d") for session in sessions[-days:]]
+        lookback_days *= 2

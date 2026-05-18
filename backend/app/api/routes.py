@@ -17,6 +17,49 @@ class ChatRequest(BaseModel):
     ksd_fund: str | None = None
 
 
+def _collect_missing_recent_holdings(ksd_fund: str, days: int) -> dict:
+    collector = TigerCollector()
+    try:
+        fix_dates = recent_weekdays(collector.latest_fix_date(ksd_fund), days)
+        with get_connection() as conn:
+            existing_dates = {
+                fix_date
+                for fix_date in fix_dates
+                if snapshot_exists(conn, ksd_fund, fix_date.replace(".", "-"))
+            }
+
+        snapshots = []
+        unavailable = []
+        for fix_date in fix_dates:
+            if fix_date in existing_dates:
+                continue
+
+            snapshot = collector.fetch_holdings_snapshot(ksd_fund=ksd_fund, fix_date=fix_date)
+            if not snapshot.holdings:
+                unavailable.append(fix_date.replace(".", "-"))
+                continue
+
+            with get_connection() as conn:
+                snapshot_id = insert_holdings_snapshot(conn, snapshot)
+            snapshots.append(
+                {
+                    "snapshot_id": snapshot_id,
+                    "base_date": snapshot.base_date,
+                    "holdings": len(snapshot.holdings),
+                    "content_hash": snapshot.content_hash,
+                }
+            )
+    finally:
+        collector.close()
+
+    return {
+        "business_dates": [fix_date.replace(".", "-") for fix_date in fix_dates],
+        "snapshots": snapshots,
+        "skipped": [fix_date.replace(".", "-") for fix_date in fix_dates if fix_date in existing_dates],
+        "unavailable": unavailable,
+    }
+
+
 @router.post("/collect/tiger/products")
 def collect_tiger_products() -> dict:
     collector = TigerCollector()
@@ -55,25 +98,18 @@ def collect_recent_tiger_holdings(ksd_fund: str, days: int = 3) -> dict:
     collector = TigerCollector()
     try:
         products = collector.fetch_products()
-        snapshots = collector.fetch_recent_holdings_snapshots(ksd_fund=ksd_fund, days=days)
     finally:
         collector.close()
 
     with get_connection() as conn:
         upsert_products(conn, products)
-        results = []
-        for snapshot in snapshots:
-            snapshot_id = insert_holdings_snapshot(conn, snapshot)
-            results.append(
-                {
-                    "snapshot_id": snapshot_id,
-                    "base_date": snapshot.base_date,
-                    "holdings": len(snapshot.holdings),
-                    "content_hash": snapshot.content_hash,
-                }
-            )
 
-    return {"ksd_fund": ksd_fund, "days": days, "snapshots": results}
+    result = _collect_missing_recent_holdings(ksd_fund, days)
+    return {
+        "ksd_fund": ksd_fund,
+        "days": days,
+        **result,
+    }
 
 
 @router.post("/collect/tiger/recent-watchlist")
@@ -139,21 +175,23 @@ def get_weight_changes(ksd_fund: str, days: int = 3) -> list[dict]:
 
 
 @router.get("/analysis/holdings-pivot")
-def get_holdings_pivot(ksd_fund: str, days: int = 3) -> dict:
+def get_holdings_pivot(ksd_fund: str, days: int = 3, start_date: str | None = None, end_date: str | None = None) -> dict:
+    if start_date is None and end_date is None:
+        _collect_missing_recent_holdings(ksd_fund, days)
     with get_connection() as conn:
-        return holdings_pivot(conn, ksd_fund=ksd_fund, days=days)
+        return holdings_pivot(conn, ksd_fund=ksd_fund, days=days, start_date=start_date, end_date=end_date)
 
 
 @router.get("/analysis/cross-etf-weight-changes")
-def get_cross_etf_weight_changes(days: int = 3, limit: int = 40) -> dict:
+def get_cross_etf_weight_changes(days: int = 3, limit: int = 40, start_date: str | None = None, end_date: str | None = None) -> dict:
     with get_connection() as conn:
-        return cross_etf_weight_changes(conn, days=days, limit=limit)
+        return cross_etf_weight_changes(conn, days=days, limit=limit, start_date=start_date, end_date=end_date)
 
 
 @router.get("/analysis/etf-change-summary")
-def get_etf_change_summary(days: int = 3, limit: int = 100) -> dict:
+def get_etf_change_summary(days: int = 3, limit: int = 100, start_date: str | None = None, end_date: str | None = None) -> dict:
     with get_connection() as conn:
-        return etf_change_summary(conn, days=days, limit=limit)
+        return etf_change_summary(conn, days=days, limit=limit, start_date=start_date, end_date=end_date)
 
 
 @router.post("/chat")

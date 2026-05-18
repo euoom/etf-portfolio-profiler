@@ -28,13 +28,39 @@ uv run uvicorn app.main:app --reload --port 8000
 Run the local backend and the configured ngrok tunnel together:
 
 ```bash
-./scripts/dev-tunnel.sh
+./scripts/start-dev-tunnel.sh
+```
+
+Run the backend, local frontend, and configured ngrok tunnel together:
+
+```bash
+./scripts/start-dev-all.sh
 ```
 
 Optional environment overrides:
 
 ```bash
-PORT=8010 NGROK_TUNNEL=etf-portfolio-profiler-api ./scripts/dev-tunnel.sh
+PORT=8010 NGROK_TUNNEL=etf-portfolio-profiler-api ./scripts/start-dev-tunnel.sh
+PORT=8010 FRONTEND_PORT=5174 NGROK_TUNNEL=etf-portfolio-profiler-api ./scripts/start-dev-all.sh
+```
+
+Run the production backend with a daily update check:
+
+```bash
+./scripts/start-prod.sh
+```
+
+By default, `start-prod.sh` starts the backend and checks for updates every day at `04:00`. If a newer `master` commit exists, it applies the update, restarts the backend, and verifies `/health`. Override the update time or disable the built-in update loop with:
+
+```bash
+UPDATE_CHECK_TIME=03:30 ./scripts/start-prod.sh
+AUTO_UPDATE=false ./scripts/start-prod.sh
+```
+
+Run the same pull-based production update once:
+
+```bash
+./scripts/update-prod.sh
 ```
 
 Useful endpoints:

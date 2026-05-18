@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 BACKEND_DIR = ROOT_DIR / "backend"
-DATA_DIR = ROOT_DIR / "data"
+DATA_DIR = Path(os.getenv("ETF_PROFILER_DATA_DIR", ROOT_DIR / "data"))
 DB_PATH = DATA_DIR / "etf_portfolio_profiler.db"
 
 

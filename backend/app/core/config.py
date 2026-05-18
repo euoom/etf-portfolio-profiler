@@ -41,3 +41,4 @@ NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "minimaxai/minimax-m2.7").strip()
 
 TIGER_BASE_URL = "https://investments.miraeasset.com"
 TIGER_CONTEXT = "/tigeretf"
+TIGER_REQUEST_DELAY_SECONDS = float(os.getenv("TIGER_REQUEST_DELAY_SECONDS", "0.75"))

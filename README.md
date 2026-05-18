@@ -42,6 +42,7 @@ Optional environment overrides:
 ```bash
 PORT=8010 NGROK_TUNNEL=etf-portfolio-profiler-api ./scripts/start-dev-tunnel.sh
 PORT=8010 FRONTEND_PORT=5174 NGROK_TUNNEL=etf-portfolio-profiler-api ./scripts/start-dev-all.sh
+TIGER_REQUEST_DELAY_SECONDS=1.0 ./scripts/start-dev-tunnel.sh
 ```
 
 Run the production backend with a daily update check:

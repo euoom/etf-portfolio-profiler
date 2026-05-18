@@ -1,5 +1,6 @@
 import hashlib
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -7,7 +8,7 @@ import httpx
 import exchange_calendars as xcals
 from bs4 import BeautifulSoup
 
-from app.core.config import TIGER_BASE_URL
+from app.core.config import TIGER_BASE_URL, TIGER_REQUEST_DELAY_SECONDS
 
 
 LIST_URL = f"{TIGER_BASE_URL}/tigeretf/ko/product/search/list.ajax"
@@ -62,7 +63,9 @@ class TigerHoldingsSnapshot:
 
 
 class TigerCollector:
-    def __init__(self, timeout: float = 30.0) -> None:
+    def __init__(self, timeout: float = 30.0, request_delay_seconds: float = TIGER_REQUEST_DELAY_SECONDS) -> None:
+        self._request_delay_seconds = max(request_delay_seconds, 0.0)
+        self._last_request_at: float | None = None
         self._client = httpx.Client(
             timeout=timeout,
             headers={
@@ -73,6 +76,17 @@ class TigerCollector:
 
     def close(self) -> None:
         self._client.close()
+
+    def _post(self, url: str, data: dict[str, str]) -> httpx.Response:
+        if self._last_request_at is not None and self._request_delay_seconds > 0:
+            elapsed = time.monotonic() - self._last_request_at
+            remaining = self._request_delay_seconds - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
+        response = self._client.post(url, data=data)
+        self._last_request_at = time.monotonic()
+        return response
 
     def fetch_products(self, list_count: int = 2000) -> list[TigerProduct]:
         payload = {
@@ -91,7 +105,7 @@ class TigerCollector:
             "orderA": "Month03",
             "orderB": "descending",
         }
-        response = self._client.post(LIST_URL, data=payload)
+        response = self._post(LIST_URL, data=payload)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         products: list[TigerProduct] = []
@@ -187,7 +201,7 @@ class TigerCollector:
         return self._fetch_default_fix_date(ksd_fund)
 
     def _fetch_default_fix_date(self, ksd_fund: str) -> str:
-        response = self._client.post(PDF_CONTAINER_URL, data={"ksdFund": ksd_fund, "fixDate": "", "prfPrd": "", "order": ""})
+        response = self._post(PDF_CONTAINER_URL, data={"ksdFund": ksd_fund, "fixDate": "", "prfPrd": "", "order": ""})
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         date_input = soup.select_one('input[name="fixDate"]')
@@ -205,7 +219,7 @@ class TigerCollector:
         first_index: int,
         list_count: int = 10,
     ) -> str:
-        response = self._client.post(
+        response = self._post(
             PDF_LIST_URL,
             data={
                 "ksdFund": ksd_fund,

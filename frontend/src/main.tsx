@@ -13,6 +13,17 @@ const queryClient = new QueryClient();
 
 type AnalysisMode = "list" | "single" | "cross";
 type EtfChartMetric = "change_score" | "quantity" | "valuation" | "weight";
+type CrossChartMetric =
+  | "quantity"
+  | "quantity_delta"
+  | "quantity_delta_ratio"
+  | "valuation_amount"
+  | "valuation_delta"
+  | "valuation_delta_ratio"
+  | "avg_weight"
+  | "avg_weight_delta"
+  | "max_weight"
+  | "max_weight_delta";
 type PeriodMode = "5" | "10" | "20" | "custom";
 type DetailChartMetric =
   | "quantity"
@@ -56,12 +67,20 @@ type CrossEtfRow = {
   asset_code: string;
   asset_name: string;
   weights: Record<string, number>;
+  avg_weights?: Record<string, number>;
+  max_weights?: Record<string, number>;
   quantities: Record<string, number>;
   valuation_amounts: Record<string, number>;
   etf_counts: Record<string, number>;
   start_weight: number;
   end_weight: number;
   weight_delta: number;
+  start_avg_weight?: number;
+  end_avg_weight?: number;
+  avg_weight_delta?: number;
+  start_max_weight?: number;
+  end_max_weight?: number;
+  max_weight_delta?: number;
   start_quantity: number;
   end_quantity: number;
   quantity_delta: number;
@@ -131,6 +150,7 @@ function App() {
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("list");
   const [aiPanelOpen, setAiPanelOpen] = useState(true);
   const [etfChartMetric, setEtfChartMetric] = useState<EtfChartMetric>("change_score");
+  const [crossChartMetric, setCrossChartMetric] = useState<CrossChartMetric>("valuation_delta");
   const [detailChartMetric, setDetailChartMetric] = useState<DetailChartMetric>("weight_delta");
   const [listDownloadMode, setListDownloadMode] = useState(false);
   const [selectedDownloadFunds, setSelectedDownloadFunds] = useState<string[]>([]);
@@ -171,7 +191,7 @@ function App() {
 
   const crossEtfChanges = useQuery({
     queryKey: ["cross-etf-weight-changes", analysisPeriodQuery],
-    queryFn: () => api<CrossEtfResponse>(`/api/analysis/cross-etf-weight-changes?${analysisPeriodQuery}&limit=40`),
+    queryFn: () => api<CrossEtfResponse>(`/api/analysis/cross-etf-weight-changes?${analysisPeriodQuery}&limit=100`),
   });
 
   const etfChangeSummary = useQuery({
@@ -302,24 +322,36 @@ function App() {
       }
 
       if (analysisMode === "cross") {
-        const rows = (crossEtfChanges.data?.rows ?? []).slice(0, 14).reverse();
+        const metric = getCrossChartMetric(crossChartMetric);
+        const isDirectionalMetric = crossChartMetric.endsWith("_delta") || crossChartMetric.endsWith("_delta_ratio");
+        const isQuantityMetric =
+          crossChartMetric === "quantity" || crossChartMetric === "quantity_delta" || crossChartMetric === "quantity_delta_ratio";
+        const sourceRows = isQuantityMetric
+          ? (crossEtfChanges.data?.rows ?? []).filter((item) => !isCashLikeHolding(item.asset_code, item.asset_name))
+          : crossEtfChanges.data?.rows ?? [];
+        const rows = sourceRows
+          .slice()
+          .sort((a, b) => Math.abs(metric.value(b)) - Math.abs(metric.value(a)))
+          .slice(0, 14)
+          .reverse();
         return {
           backgroundColor: "transparent",
-          color: [theme === "dark" ? "#63a7ff" : "#2563eb"],
+          color: metric.colors(theme),
           textStyle: { color: theme === "dark" ? "#d7dde8" : "#334155" },
+          legend: { top: 0, textStyle: { color: theme === "dark" ? "#d7dde8" : "#334155" } },
           tooltip: {
             trigger: "axis",
             axisPointer: { type: "shadow" },
             backgroundColor: theme === "dark" ? "#181b20" : "#ffffff",
             borderColor: theme === "dark" ? "#343a43" : "#d9dee7",
             textStyle: { color: theme === "dark" ? "#f8fafc" : "#0f172a" },
-            valueFormatter: (value: number) => `${Number(value).toFixed(2)}%p`,
+            valueFormatter: (value: number) => metric.format(Number(value)),
           },
-          grid: { top: 24, right: 28, bottom: 32, left: 140 },
+          grid: { top: 54, right: 28, bottom: 32, left: 140 },
           xAxis: {
             type: "value",
-            name: "합산 비중 변화",
-            axisLabel: { color: theme === "dark" ? "#9aa4b2" : "#64748b", formatter: "{value}%p" },
+            name: metric.axisName,
+            axisLabel: { color: theme === "dark" ? "#9aa4b2" : "#64748b", formatter: metric.axisFormatter },
             splitLine: { lineStyle: { color: theme === "dark" ? "#272b32" : "#e2e8f0" } },
           },
           yAxis: {
@@ -330,12 +362,16 @@ function App() {
           },
           series: [
             {
-              name: "합산 비중 변화",
+              name: metric.label,
               type: "bar",
-              data: rows.map((item) => item.weight_delta),
+              data: rows.map((item) => metric.value(item) || 0),
               itemStyle: {
                 color: (params: { value: number }) =>
-                  params.value >= 0 ? (theme === "dark" ? "#f87171" : "#dc2626") : theme === "dark" ? "#60a5fa" : "#2563eb",
+                  isDirectionalMetric && params.value < 0
+                    ? theme === "dark"
+                      ? "#60a5fa"
+                      : "#2563eb"
+                    : metric.colors(theme)[0],
               },
             },
           ],
@@ -483,7 +519,7 @@ function App() {
         })),
       };
     },
-    [analysisMode, crossEtfChanges.data, detailChartMetric, etfChangeSummary.data, etfChartMetric, pivot.data, theme],
+    [analysisMode, crossChartMetric, crossEtfChanges.data, detailChartMetric, etfChangeSummary.data, etfChartMetric, pivot.data, theme],
   );
   const chartEvents = useMemo(
     () => ({
@@ -895,9 +931,24 @@ function App() {
                   </optgroup>
                 </select>
               ) : (
-                <span>
-                  여러 ETF에 걸친 종목별 합산 비중 변화
-                </span>
+                <select value={crossChartMetric} onChange={(event) => setCrossChartMetric(event.target.value as CrossChartMetric)}>
+                  <optgroup label="수량 기준">
+                    <option value="quantity">총 수량</option>
+                    <option value="quantity_delta">수량 변화량</option>
+                    <option value="quantity_delta_ratio">수량 변화율</option>
+                  </optgroup>
+                  <optgroup label="금액 기준">
+                    <option value="valuation_amount">총 금액</option>
+                    <option value="valuation_delta">금액 변화량</option>
+                    <option value="valuation_delta_ratio">금액 변화율</option>
+                  </optgroup>
+                  <optgroup label="ETF 내 비중 기준">
+                    <option value="avg_weight">평균 비중</option>
+                    <option value="avg_weight_delta">평균 비중 변화량</option>
+                    <option value="max_weight">최대 비중</option>
+                    <option value="max_weight_delta">최대 비중 변화량</option>
+                  </optgroup>
+                </select>
               )}
             </div>
             {isCurrentChartLoading ? (
@@ -1154,6 +1205,124 @@ function getEtfChartMetric(metric: EtfChartMetric) {
         data: rows.map((item) => item.change_score),
       },
     ],
+  };
+}
+
+function getCrossChartMetric(metric: CrossChartMetric) {
+  const deltaColors = (theme: "light" | "dark") => theme === "dark" ? ["#f87171", "#60a5fa"] : ["#dc2626", "#2563eb"];
+  const valueColors = (theme: "light" | "dark") => [theme === "dark" ? "#f87171" : "#dc2626"];
+  const ratio = (start: number, end: number) => start ? ((end - start) / Math.abs(start)) * 100 : 0;
+  const avgWeight = (row: CrossEtfRow) => row.end_avg_weight ?? (row.latest_etf_count ? row.end_weight / row.latest_etf_count : 0);
+  const avgWeightDelta = (row: CrossEtfRow) => row.avg_weight_delta ?? (row.latest_etf_count ? row.weight_delta / row.latest_etf_count : 0);
+  const maxWeight = (row: CrossEtfRow) => row.end_max_weight ?? row.latest_exposures[0]?.weight ?? row.end_weight;
+  const maxWeightDelta = (row: CrossEtfRow) => row.max_weight_delta ?? row.weight_delta;
+
+  if (metric === "quantity") {
+    return {
+      label: "총 수량",
+      axisName: "총 수량",
+      axisFormatter: (value: number) => formatCompactNumber(value),
+      colors: valueColors,
+      format: (value: number) => formatCompactNumber(value),
+      value: (row: CrossEtfRow) => row.end_quantity,
+    };
+  }
+
+  if (metric === "quantity_delta") {
+    return {
+      label: "수량 변화량",
+      axisName: "수량 변화",
+      axisFormatter: (value: number) => formatCompactNumber(value),
+      colors: deltaColors,
+      format: (value: number) => formatSignedCompactNumber(value),
+      value: (row: CrossEtfRow) => row.quantity_delta,
+    };
+  }
+
+  if (metric === "quantity_delta_ratio") {
+    return {
+      label: "수량 변화율",
+      axisName: "수량 변화율",
+      axisFormatter: "{value}%",
+      colors: deltaColors,
+      format: (value: number) => formatSignedPercent(value),
+      value: (row: CrossEtfRow) => ratio(row.start_quantity, row.end_quantity),
+    };
+  }
+
+  if (metric === "valuation_amount") {
+    return {
+      label: "총 금액",
+      axisName: "총 금액",
+      axisFormatter: (value: number) => formatKrw(value),
+      colors: valueColors,
+      format: (value: number) => formatKrw(value),
+      value: (row: CrossEtfRow) => row.end_valuation_amount,
+    };
+  }
+
+  if (metric === "valuation_delta") {
+    return {
+      label: "금액 변화량",
+      axisName: "금액 변화",
+      axisFormatter: (value: number) => formatKrw(value),
+      colors: deltaColors,
+      format: (value: number) => formatSignedKrw(value),
+      value: (row: CrossEtfRow) => row.valuation_amount_delta,
+    };
+  }
+
+  if (metric === "valuation_delta_ratio") {
+    return {
+      label: "금액 변화율",
+      axisName: "금액 변화율",
+      axisFormatter: "{value}%",
+      colors: deltaColors,
+      format: (value: number) => formatSignedPercent(value),
+      value: (row: CrossEtfRow) => ratio(row.start_valuation_amount, row.end_valuation_amount),
+    };
+  }
+
+  if (metric === "avg_weight") {
+    return {
+      label: "평균 비중",
+      axisName: "평균 비중",
+      axisFormatter: "{value}%",
+      colors: valueColors,
+      format: (value: number) => formatPercent(value),
+      value: avgWeight,
+    };
+  }
+
+  if (metric === "avg_weight_delta") {
+    return {
+      label: "평균 비중 변화량",
+      axisName: "평균 비중 변화",
+      axisFormatter: "{value}%p",
+      colors: deltaColors,
+      format: (value: number) => formatSignedPercentPoint(value),
+      value: avgWeightDelta,
+    };
+  }
+
+  if (metric === "max_weight") {
+    return {
+      label: "최대 비중",
+      axisName: "최대 비중",
+      axisFormatter: "{value}%",
+      colors: valueColors,
+      format: (value: number) => formatPercent(value),
+      value: maxWeight,
+    };
+  }
+
+  return {
+    label: "최대 비중 변화량",
+    axisName: "최대 비중 변화",
+    axisFormatter: "{value}%p",
+    colors: deltaColors,
+    format: (value: number) => formatSignedPercentPoint(value),
+    value: maxWeightDelta,
   };
 }
 

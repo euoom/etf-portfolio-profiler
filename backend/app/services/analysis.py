@@ -186,6 +186,8 @@ def cross_etf_weight_changes(
             h.asset_name,
             s.base_date,
             SUM(COALESCE(h.weight, 0)) AS total_weight,
+            AVG(COALESCE(h.weight, 0)) AS avg_weight,
+            MAX(COALESCE(h.weight, 0)) AS max_weight,
             SUM(COALESCE(h.quantity, 0)) AS total_quantity,
             SUM(COALESCE(h.valuation_amount, 0)) AS total_valuation_amount,
             COUNT(DISTINCT e.etf_id) AS etf_count
@@ -224,6 +226,8 @@ def cross_etf_weight_changes(
                 "asset_code": row["asset_code"],
                 "asset_name": row["asset_name"],
                 "weights": {base_date: 0 for base_date in dates},
+                "avg_weights": {base_date: 0 for base_date in dates},
+                "max_weights": {base_date: 0 for base_date in dates},
                 "quantities": {base_date: 0 for base_date in dates},
                 "valuation_amounts": {base_date: 0 for base_date in dates},
                 "etf_counts": {base_date: 0 for base_date in dates},
@@ -231,6 +235,8 @@ def cross_etf_weight_changes(
             },
         )
         item["weights"][row["base_date"]] = row["total_weight"]
+        item["avg_weights"][row["base_date"]] = row["avg_weight"]
+        item["max_weights"][row["base_date"]] = row["max_weight"]
         item["quantities"][row["base_date"]] = row["total_quantity"]
         item["valuation_amounts"][row["base_date"]] = row["total_valuation_amount"]
         item["etf_counts"][row["base_date"]] = row["etf_count"]
@@ -249,6 +255,10 @@ def cross_etf_weight_changes(
     for item in by_asset.values():
         start_weight = item["weights"].get(start_date) or 0
         end_weight = item["weights"].get(end_date) or 0
+        start_avg_weight = item["avg_weights"].get(start_date) or 0
+        end_avg_weight = item["avg_weights"].get(end_date) or 0
+        start_max_weight = item["max_weights"].get(start_date) or 0
+        end_max_weight = item["max_weights"].get(end_date) or 0
         start_quantity = item["quantities"].get(start_date) or 0
         end_quantity = item["quantities"].get(end_date) or 0
         start_valuation_amount = item["valuation_amounts"].get(start_date) or 0
@@ -256,6 +266,12 @@ def cross_etf_weight_changes(
         item["start_weight"] = start_weight
         item["end_weight"] = end_weight
         item["weight_delta"] = end_weight - start_weight
+        item["start_avg_weight"] = start_avg_weight
+        item["end_avg_weight"] = end_avg_weight
+        item["avg_weight_delta"] = end_avg_weight - start_avg_weight
+        item["start_max_weight"] = start_max_weight
+        item["end_max_weight"] = end_max_weight
+        item["max_weight_delta"] = end_max_weight - start_max_weight
         item["start_quantity"] = start_quantity
         item["end_quantity"] = end_quantity
         item["quantity_delta"] = end_quantity - start_quantity

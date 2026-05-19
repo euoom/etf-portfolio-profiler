@@ -19,6 +19,12 @@ data/      Local SQLite database location / 로컬 SQLite 데이터베이스 위
 docs/      Design notes / 설계 메모
 ```
 
+## Data Classification
+
+원천 데이터와 앱 내부 추론 분류의 경계는 `docs/data-classification.md`에 정리합니다.
+
+The boundary between source data and app-inferred classification fields is documented in `docs/data-classification.md`.
+
 ## Backend
 
 백엔드 개발 서버 실행:
@@ -105,9 +111,34 @@ POST /api/chat
 
 Recent TIGER holdings use the Korea Exchange calendar (`XKRX`) for business-day ranges. Existing snapshots are skipped, and only missing business dates are requested.
 
-TIGER 요청은 기본적으로 연속 요청 사이에 `0.75`초 간격을 둡니다. `TIGER_REQUEST_DELAY_SECONDS`로 조정할 수 있습니다.
+TIGER 요청은 기본적으로 연속 요청 사이에 `1.0`초 간격을 둡니다. `TIGER_REQUEST_DELAY_SECONDS`로 조정할 수 있습니다.
 
-TIGER requests are throttled with a default `0.75` second delay between consecutive requests. Configure it with `TIGER_REQUEST_DELAY_SECONDS`.
+TIGER requests are throttled with a default `1.0` second delay between consecutive requests. Configure it with `TIGER_REQUEST_DELAY_SECONDS`.
+
+종목별 자산군은 기본적으로 종목 코드와 이름 패턴으로 추정합니다. 잘못 분류된 항목은 `data/asset_classification_overrides.json`에서 수동 보정할 수 있습니다. `asset_type` 값은 `stock`, `listed_product`, `fixed_income`, `derivative`, `cash` 중 하나를 사용합니다.
+
+Asset groups in the cross-ETF asset view are inferred from asset code and name patterns by default. Correct misclassified assets in `data/asset_classification_overrides.json`. Use one of `stock`, `listed_product`, `fixed_income`, `derivative`, or `cash` for `asset_type`.
+
+```json
+{
+  "by_asset_code": {
+    "QQQ US EQUITY": {
+      "asset_type": "listed_product",
+      "note": "Invesco QQQ Trust Series 1 is an ETF-like listed product."
+    }
+  },
+  "by_asset_name": {
+    "예시 종목명": {
+      "asset_type": "stock",
+      "note": "Optional note for future review."
+    }
+  }
+}
+```
+
+ETF별 목록의 ETF 유형은 원천 `asset_class`, `category`, ETF 이름 패턴으로 추정합니다. 잘못 분류된 항목은 `data/etf_classification_overrides.json`에서 수동 보정할 수 있습니다. 자세한 기준은 `docs/data-classification.md`를 참고하세요.
+
+ETF types in the ETF list are inferred from source `asset_class`, `category`, and ETF name patterns. Correct misclassified ETFs in `data/etf_classification_overrides.json`. See `docs/data-classification.md` for the detailed rules.
 
 ## Frontend
 

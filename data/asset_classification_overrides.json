@@ -1,0 +1,9 @@
+{
+  "by_asset_code": {
+    "QQQ US EQUITY": {
+      "asset_type": "listed_product",
+      "note": "Invesco QQQ Trust Series 1 is an ETF-like listed product, not a single stock."
+    }
+  },
+  "by_asset_name": {}
+}

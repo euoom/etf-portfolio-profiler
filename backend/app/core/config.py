@@ -6,6 +6,12 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 BACKEND_DIR = ROOT_DIR / "backend"
 DATA_DIR = Path(os.getenv("ETF_PROFILER_DATA_DIR", ROOT_DIR / "data"))
 DB_PATH = DATA_DIR / "etf_portfolio_profiler.db"
+ASSET_CLASSIFICATION_OVERRIDES_PATH = Path(
+    os.getenv("ASSET_CLASSIFICATION_OVERRIDES_PATH", DATA_DIR / "asset_classification_overrides.json")
+)
+ETF_CLASSIFICATION_OVERRIDES_PATH = Path(
+    os.getenv("ETF_CLASSIFICATION_OVERRIDES_PATH", DATA_DIR / "etf_classification_overrides.json")
+)
 
 
 def _load_env_file(path: Path) -> None:
@@ -41,4 +47,4 @@ NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "minimaxai/minimax-m2.7").strip()
 
 TIGER_BASE_URL = "https://investments.miraeasset.com"
 TIGER_CONTEXT = "/tigeretf"
-TIGER_REQUEST_DELAY_SECONDS = float(os.getenv("TIGER_REQUEST_DELAY_SECONDS", "0.75"))
+TIGER_REQUEST_DELAY_SECONDS = float(os.getenv("TIGER_REQUEST_DELAY_SECONDS", "1.0"))

@@ -2,7 +2,7 @@ import json
 
 from app.services import analysis
 from app.db.database import get_connection, init_db
-from app.services.analysis import cross_etf_weight_changes
+from app.services.analysis import asset_exposures, cross_etf_weight_changes
 from app.services.storage import insert_holdings_snapshot, upsert_products
 from app.services.tiger_collector import TigerHolding, TigerHoldingsSnapshot, TigerProduct
 
@@ -76,6 +76,26 @@ def test_etf_classification_override_file(monkeypatch, tmp_path) -> None:
     analysis._load_etf_classification_overrides.cache_clear()
 
 
+def test_asset_exposures_can_filter_by_name_when_codes_overlap() -> None:
+    init_db()
+    with get_connection() as conn:
+        upsert_products(
+            conn,
+            [
+                TigerProduct("KRFUND000101", "ETF Shared One", "000101", "주식", "테마", None, None, None),
+                TigerProduct("KRFUND000102", "ETF Shared Two", "000102", "주식", "테마", None, None, None),
+            ],
+        )
+        for base_date in ("2026-05-14", "2026-05-15"):
+            insert_holdings_snapshot(conn, _snapshot("KRFUND000101", base_date, "-", 100, 100_000, 10, "Shared Bond A"))
+            insert_holdings_snapshot(conn, _snapshot("KRFUND000102", base_date, "-", 200, 200_000, 20, "Shared Bond B"))
+
+        result = asset_exposures(conn, asset_code="-", asset_name="Shared Bond A", days=2)
+
+    assert [row["etf_name"] for row in result["rows"]] == ["ETF Shared One"]
+    assert result["rows"][0]["end_weight"] == 10
+
+
 def _snapshot(
     ksd_fund: str,
     base_date: str,
@@ -83,6 +103,7 @@ def _snapshot(
     quantity: float,
     valuation_amount: float,
     weight: float,
+    asset_name: str | None = None,
 ) -> TigerHoldingsSnapshot:
     return TigerHoldingsSnapshot(
         ksd_fund=ksd_fund,
@@ -90,7 +111,7 @@ def _snapshot(
         holdings=[
             TigerHolding(
                 asset_code=asset_code,
-                asset_name=f"Asset {asset_code}",
+                asset_name=asset_name or f"Asset {asset_code}",
                 quantity=quantity,
                 valuation_amount=valuation_amount,
                 weight=weight,

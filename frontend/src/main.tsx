@@ -104,6 +104,11 @@ type CrossEtfResponse = {
   rows: CrossEtfRow[];
 };
 
+type AssetRouteTarget = {
+  asset_code: string;
+  asset_name?: string;
+};
+
 type ExtremeChange = {
   asset_code: string;
   asset_name: string;
@@ -172,6 +177,7 @@ function App() {
   const chartRowClickHandlerRef = useRef<((event: ChartClickEvent) => void) | null>(null);
   const [selectedFund, setSelectedFund] = useState("KR70183J0002");
   const [selectedAssetCode, setSelectedAssetCode] = useState("");
+  const [selectedAssetName, setSelectedAssetName] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const saved = localStorage.getItem("theme");
@@ -212,8 +218,10 @@ function App() {
       }
       if (route.assetCode) {
         setSelectedAssetCode(route.assetCode);
+        setSelectedAssetName(route.assetName ?? "");
       } else if (route.mode !== "asset") {
         setSelectedAssetCode("");
+        setSelectedAssetName("");
       }
     }
 
@@ -242,8 +250,8 @@ function App() {
   });
 
   const assetExposures = useQuery({
-    queryKey: ["asset-exposures", selectedAssetCode, analysisPeriodQuery],
-    queryFn: () => api<AssetExposuresResponse>(`/api/analysis/asset-exposures?asset_code=${encodeURIComponent(selectedAssetCode)}&${analysisPeriodQuery}`),
+    queryKey: ["asset-exposures", selectedAssetCode, selectedAssetName, analysisPeriodQuery],
+    queryFn: () => api<AssetExposuresResponse>(`/api/analysis/asset-exposures?${getAssetExposureQuery(selectedAssetCode, selectedAssetName, analysisPeriodQuery)}`),
     enabled: analysisMode === "asset" && Boolean(selectedAssetCode),
   });
 
@@ -292,7 +300,28 @@ function App() {
   const pivotRows = pivot.data?.rows ?? [];
   const crossRows = crossEtfChanges.data?.rows ?? [];
   const pivotDates = pivot.data?.dates ?? [];
-  const selectedAsset = crossRows.find((item) => item.asset_code === selectedAssetCode);
+  const selectedAsset = crossRows.find(
+    (item) => item.asset_code === selectedAssetCode && (!selectedAssetName || item.asset_name === selectedAssetName),
+  );
+  const selectedAssetForExport: CrossEtfRow = selectedAsset ?? {
+    asset_code: selectedAssetCode,
+    asset_name: selectedAssetName || selectedAssetCode,
+    weights: {},
+    quantities: {},
+    valuation_amounts: {},
+    etf_counts: {},
+    start_weight: 0,
+    end_weight: 0,
+    weight_delta: 0,
+    start_quantity: 0,
+    end_quantity: 0,
+    quantity_delta: 0,
+    start_valuation_amount: 0,
+    end_valuation_amount: 0,
+    valuation_amount_delta: 0,
+    latest_etf_count: 0,
+    latest_exposures: [],
+  };
   const crossFilteredRows = useMemo(() => filterCrossRowsByAssetType(crossRows, assetTypeFilter), [assetTypeFilter, crossRows]);
   const crossScoreRows = crossFilteredRows;
   const crossScoreMaxes = useMemo(() => getCrossScoreMaxes(crossScoreRows), [crossScoreRows]);
@@ -336,7 +365,7 @@ function App() {
       : analysisMode === "single"
         ? pivotRows.length > 0
         : analysisMode === "asset"
-          ? Boolean(selectedAsset)
+          ? Boolean(assetExposures.data?.rows.length)
           : crossDisplayRows.length > 0;
 
   useEffect(() => {
@@ -373,18 +402,18 @@ function App() {
   const partiallyListRowsSelected = selectedDownloadFunds.length > 0 && !allListRowsSelected;
 
   useEffect(() => {
-    const currentAssets = new Set(crossDisplayRows.map((item) => item.asset_code));
+    const currentAssets = new Set(crossDisplayRows.map(getAssetRowKey));
     setSelectedDownloadAssets((current) => current.filter((assetCode) => currentAssets.has(assetCode)));
   }, [crossDisplayRows]);
 
   const selectedCrossDownloadSet = useMemo(() => new Set(selectedDownloadAssets), [selectedDownloadAssets]);
-  const allCrossRowsSelected = crossDisplayRows.length > 0 && crossDisplayRows.every((item) => selectedCrossDownloadSet.has(item.asset_code));
+  const allCrossRowsSelected = crossDisplayRows.length > 0 && crossDisplayRows.every((item) => selectedCrossDownloadSet.has(getAssetRowKey(item)));
   const partiallyCrossRowsSelected = selectedDownloadAssets.length > 0 && !allCrossRowsSelected;
 
   const chartOption = useMemo(
     () => {
       if (analysisMode === "list") {
-        const rows = (etfChangeSummary.data?.rows ?? []).slice(0, 12).reverse();
+        const rows = summaryRows.slice(0, 12).reverse();
         const metric = getEtfChartMetric(etfChartMetric);
         return {
           backgroundColor: "transparent",
@@ -679,7 +708,7 @@ function App() {
         })),
       };
     },
-    [analysisMode, assetChartMetric, crossChartMetric, crossChartRows, crossEtfChanges.data, detailChartMetric, etfChangeSummary.data, etfChartMetric, pivot.data, selectedAsset, theme],
+    [analysisMode, assetChartMetric, assetExposures.data, crossChartMetric, crossChartRows, detailChartMetric, etfChartMetric, pivot.data, selectedAsset, summaryRows, theme],
   );
   const chartEvents = useMemo(
     () => ({
@@ -695,14 +724,14 @@ function App() {
         if (analysisMode === "cross") {
           const target = crossChartRows.find((item) => item.asset_name === params.name);
           if (target) {
-            navigateAsset(target.asset_code);
+            navigateAsset(target);
           }
           return;
         }
         if (analysisMode === "single") {
           const target = pivotRows.find((item) => item.asset_name === params.name);
           if (target) {
-            navigateAsset(target.asset_code);
+            navigateAsset(target);
           }
         }
       },
@@ -737,7 +766,7 @@ function App() {
 
       const target = crossChartRowsRef.current[rowIndex];
       if (target) {
-        navigateAsset(target.asset_code);
+        navigateAsset(target);
       }
     };
 
@@ -964,9 +993,9 @@ function App() {
   }
 
   async function downloadAssetWorkbook() {
-    if (analysisMode !== "asset" || !selectedAsset || !assetExposures.data?.rows.length) return;
+    if (analysisMode !== "asset" || !assetExposures.data?.rows.length) return;
     await exportAssetWorkbook({
-      asset: selectedAsset,
+      asset: selectedAssetForExport,
       dates: assetExposures.data.dates,
       exposuresList: assetExposures.data.rows,
     });
@@ -980,12 +1009,12 @@ function App() {
     }
     if (!selectedDownloadAssets.length || isDownloadingCrossList) return;
 
-    const selectedRows = crossDisplayRows.filter((item) => selectedCrossDownloadSet.has(item.asset_code));
+    const selectedRows = crossDisplayRows.filter((item) => selectedCrossDownloadSet.has(getAssetRowKey(item)));
     setIsDownloadingCrossList(true);
     try {
       for (const item of selectedRows) {
         const data = await api<AssetExposuresResponse>(
-          `/api/analysis/asset-exposures?asset_code=${encodeURIComponent(item.asset_code)}&${analysisPeriodQuery}`
+          `/api/analysis/asset-exposures?${getAssetExposureQuery(item.asset_code, item.asset_name, analysisPeriodQuery)}`
         );
         if (!data.rows.length || !data.dates.length) continue;
         await exportAssetWorkbook({
@@ -1002,14 +1031,14 @@ function App() {
     }
   }
 
-  function toggleCrossDownloadAsset(assetCode: string) {
+  function toggleCrossDownloadAsset(assetKey: string) {
     setSelectedDownloadAssets((current) =>
-      current.includes(assetCode) ? current.filter((item) => item !== assetCode) : [...current, assetCode],
+      current.includes(assetKey) ? current.filter((item) => item !== assetKey) : [...current, assetKey],
     );
   }
 
   function toggleAllCrossDownloadAssets(checked: boolean) {
-    setSelectedDownloadAssets(checked ? crossDisplayRows.map((item) => item.asset_code) : []);
+    setSelectedDownloadAssets(checked ? crossDisplayRows.map(getAssetRowKey) : []);
   }
 
   async function handleListDownloadButton() {
@@ -1070,6 +1099,7 @@ function App() {
     if (analysisMode === "cross" || analysisMode === "asset") {
       setCrossChartMetric("change_score");
       setSelectedAssetCode("");
+      setSelectedAssetName("");
       navigateCross();
       return;
     }
@@ -1084,7 +1114,7 @@ function App() {
             ETF Portfolio Profiler
           </button>
           <span className="brand-separator">|</span>
-          <span className="current-view">{currentViewTitle(analysisMode, selectedEtfName, selectedAsset?.asset_name)}</span>
+          <span className="current-view">{currentViewTitle(analysisMode, selectedEtfName, selectedAsset?.asset_name || selectedAssetName)}</span>
         </div>
         <div className="toolbar toolbar-primary">
           <div className="toolbar-group">
@@ -1365,7 +1395,7 @@ function App() {
                         return (
                           <tr key={`${item.asset_code}-${item.asset_name}`}>
                             <td>
-                              <button className="text-link" onClick={() => navigateAsset(item.asset_code)}>
+                              <button className="text-link" onClick={() => navigateAsset(item)}>
                                 {item.asset_name}
                               </button>
                             </td>
@@ -1423,13 +1453,13 @@ function App() {
                               <td className="select-cell">
                                 <input
                                   type="checkbox"
-                                  checked={selectedCrossDownloadSet.has(item.asset_code)}
-                                  onChange={() => toggleCrossDownloadAsset(item.asset_code)}
+                                  checked={selectedCrossDownloadSet.has(getAssetRowKey(item))}
+                                  onChange={() => toggleCrossDownloadAsset(getAssetRowKey(item))}
                                 />
                               </td>
                             )}
                             <td>
-                              <button className="text-link" onClick={() => navigateAsset(item.asset_code)}>
+                              <button className="text-link" onClick={() => navigateAsset(item)}>
                                 {item.asset_name}
                               </button>
                             </td>
@@ -2206,15 +2236,19 @@ function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function parseRoute(): { mode: AnalysisMode; ksdFund?: string; assetCode?: string } {
+function parseRoute(): { mode: AnalysisMode; ksdFund?: string; assetCode?: string; assetName?: string } {
   const hash = window.location.hash.replace(/^#/, "");
   const etfMatch = hash.match(/^\/etf\/([^/]+)$/);
   if (etfMatch) {
     return { mode: "single", ksdFund: decodeURIComponent(etfMatch[1]) };
   }
-  const assetMatch = hash.match(/^\/asset\/([^/]+)$/);
+  const assetMatch = hash.match(/^\/asset\/([^/]+)(?:\/([^/]+))?$/);
   if (assetMatch) {
-    return { mode: "asset", assetCode: decodeURIComponent(assetMatch[1]) };
+    return {
+      mode: "asset",
+      assetCode: decodeURIComponent(assetMatch[1]),
+      assetName: assetMatch[2] ? decodeURIComponent(assetMatch[2]) : undefined,
+    };
   }
   if (hash === "/cross") {
     return { mode: "cross" };
@@ -2247,13 +2281,28 @@ function navigateCross() {
   window.location.hash = "/cross";
 }
 
-function navigateAsset(assetCode: string) {
-  const nextHash = `#/asset/${encodeURIComponent(assetCode)}`;
+function navigateAsset(target: AssetRouteTarget) {
+  const nextHash = target.asset_name
+    ? `#/asset/${encodeURIComponent(target.asset_code)}/${encodeURIComponent(target.asset_name)}`
+    : `#/asset/${encodeURIComponent(target.asset_code)}`;
   if (window.location.hash === nextHash) {
     window.dispatchEvent(new HashChangeEvent("hashchange"));
     return;
   }
   window.location.hash = nextHash;
+}
+
+function getAssetRowKey(target: AssetRouteTarget) {
+  return `${target.asset_code}\u001f${target.asset_name ?? ""}`;
+}
+
+function getAssetExposureQuery(assetCode: string, assetName: string | undefined, analysisPeriodQuery: string) {
+  const params = new URLSearchParams(analysisPeriodQuery);
+  params.set("asset_code", assetCode);
+  if (assetName) {
+    params.set("asset_name", assetName);
+  }
+  return params.toString();
 }
 
 function currentViewTitle(mode: AnalysisMode, selectedEtfName: string, selectedAssetName?: string) {
@@ -2610,7 +2659,7 @@ function ExtremeCell({
 }: {
   change: ExtremeChange | null;
   suffix: string;
-  onAssetClick: (assetCode: string) => void;
+  onAssetClick: (target: AssetRouteTarget) => void;
 }) {
   if (!change) {
     return <td className="empty-cell">-</td>;
@@ -2621,7 +2670,7 @@ function ExtremeCell({
       <span className="change-cell">
         <span className={getDeltaClass(change.value)}>{formatExtremeValue(change.value, suffix)}</span>
         <span className="change-cell-divider" aria-hidden="true" />
-        <button className="asset-link" title={change.asset_code} onClick={() => onAssetClick(change.asset_code)}>
+        <button className="asset-link" title={change.asset_code} onClick={() => onAssetClick(change)}>
           {change.asset_name}
         </button>
       </span>

@@ -706,6 +706,7 @@ def _assign_extreme(
 def asset_exposures(
     conn: sqlite3.Connection,
     asset_code: str,
+    asset_name: str | None = None,
     days: int = 3,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -715,6 +716,8 @@ def asset_exposures(
         return {"dates": [], "rows": []}
 
     placeholders = ",".join("?" for _ in dates)
+    asset_name_filter = "AND h.asset_name = ?" if asset_name is not None else ""
+    asset_params = (asset_code, asset_name) if asset_name is not None else (asset_code,)
     raw_holdings = conn.execute(
         f"""
         SELECT
@@ -728,10 +731,11 @@ def asset_exposures(
         JOIN etf_daily_snapshot s ON s.snapshot_id = h.snapshot_id
         JOIN etf e ON e.etf_id = s.etf_id
         WHERE h.asset_code = ?
+          {asset_name_filter}
           AND s.base_date IN ({placeholders})
         ORDER BY s.base_date ASC
         """,
-        (asset_code, *dates),
+        (*asset_params, *dates),
     ).fetchall()
 
     etf_data = {}
@@ -778,4 +782,3 @@ def asset_exposures(
     exposures.sort(key=lambda x: x["end_weight"], reverse=True)
 
     return {"dates": dates, "rows": exposures}
-

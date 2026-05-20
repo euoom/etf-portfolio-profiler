@@ -195,9 +195,22 @@ def get_etf_change_summary(days: int = 3, limit: int = 100, start_date: str | No
 
 
 @router.get("/analysis/asset-exposures")
-def get_asset_exposures(asset_code: str, days: int = 3, start_date: str | None = None, end_date: str | None = None) -> dict:
+def get_asset_exposures(
+    asset_code: str,
+    asset_name: str | None = None,
+    days: int = 3,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
     with get_connection() as conn:
-        return asset_exposures(conn, asset_code=asset_code, days=days, start_date=start_date, end_date=end_date)
+        return asset_exposures(
+            conn,
+            asset_code=asset_code,
+            asset_name=asset_name,
+            days=days,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
 
 @router.post("/chat")

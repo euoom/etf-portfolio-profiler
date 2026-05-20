@@ -61,7 +61,7 @@ command -v ngrok >/dev/null 2>&1 || {
 echo "Starting backend on ${HOST}:${PORT}..."
 (
   cd "$BACKEND_DIR"
-  uv run python main.py --host "$HOST" --port "$PORT" --no-reload
+  uv run python main.py --host "$HOST" --port "$PORT" --reload
 ) >"$BACKEND_LOG" 2>&1 &
 backend_pid=$!
 

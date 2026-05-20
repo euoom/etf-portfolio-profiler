@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { forwardRef, startTransition, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import ReactECharts from "echarts-for-react";
 import type { CellValue, Worksheet } from "exceljs";
 import JSZip from "jszip";
-import { Bot, Database, Download, Moon, PanelRightClose, PanelRightOpen, RefreshCw, Send, Sun } from "lucide-react";
+import { Bot, Command, Download, Moon, PanelRightClose, PanelRightOpen, RotateCcw, Search, Send, Square, Sun } from "lucide-react";
 import "./styles.css";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
@@ -109,6 +109,11 @@ type AssetRouteTarget = {
   asset_name?: string;
 };
 
+type EtfRouteTarget = {
+  ksd_fund: string;
+  etf_name: string;
+};
+
 type ExtremeChange = {
   asset_code: string;
   asset_name: string;
@@ -158,6 +163,41 @@ type AssetExposuresResponse = {
   rows: AssetExposureRow[];
 };
 
+type ChatRole = "user" | "assistant";
+
+type ChatMessage = {
+  id: string;
+  role: ChatRole;
+  content: string;
+  actions?: ChatAction[];
+};
+
+type ChatAction = {
+  label: string;
+  kind: "asset" | "etf";
+  target: AssetRouteTarget | { ksd_fund: string };
+};
+
+type ChatContextSection = {
+  title: string;
+  rows: Record<string, unknown>[];
+};
+
+type ChatViewContext = {
+  mode: AnalysisMode;
+  period: string;
+  selected_fund?: string;
+  selected_fund_name?: string;
+  selected_asset?: AssetRouteTarget;
+  chart_metric: string;
+  filters: Record<string, string>;
+  sections: ChatContextSection[];
+  action_candidates?: {
+    etfs: EtfRouteTarget[];
+    assets: AssetRouteTarget[];
+  };
+};
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("ngrok-skip-browser-warning", "true");
@@ -169,7 +209,66 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json();
 }
 
+async function streamChat(
+  payload: { message: string; ksd_fund: string; view_context: ChatViewContext; history: { role: ChatRole; content: string }[] },
+  onChunk: (chunk: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${apiBaseUrl}/api/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "ngrok-skip-browser-warning": "true",
+    },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  if (!response.body) {
+    throw new Error("스트리밍 응답을 읽을 수 없습니다.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pendingText = "";
+  let flushTimer: number | undefined;
+
+  const flush = () => {
+    if (!pendingText) return;
+    onChunk(pendingText);
+    pendingText = "";
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pendingText += decoder.decode(value, { stream: true });
+      if (flushTimer === undefined) {
+        flushTimer = window.setTimeout(() => {
+          flushTimer = undefined;
+          flush();
+        }, 500);
+      }
+    }
+    const tail = decoder.decode();
+    if (tail) pendingText += tail;
+  } finally {
+    if (flushTimer !== undefined) {
+      window.clearTimeout(flushTimer);
+    }
+    flush();
+  }
+}
+
+function newChatId(): string {
+  return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+}
+
 function App() {
+  const chatPanelRef = useRef<ChatPanelHandle>(null);
   const listChartRowsRef = useRef<EtfChangeSummaryRow[]>([]);
   const crossChartRowsRef = useRef<CrossEtfRow[]>([]);
   const analysisModeRef = useRef<AnalysisMode>("list");
@@ -178,7 +277,6 @@ function App() {
   const [selectedFund, setSelectedFund] = useState("KR70183J0002");
   const [selectedAssetCode, setSelectedAssetCode] = useState("");
   const [selectedAssetName, setSelectedAssetName] = useState("");
-  const [chatInput, setChatInput] = useState("");
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
@@ -186,6 +284,7 @@ function App() {
   });
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("list");
   const [aiPanelOpen, setAiPanelOpen] = useState(true);
+  const [aiPanelWidth, setAiPanelWidth] = useState(420);
   const [etfChartMetric, setEtfChartMetric] = useState<EtfChartMetric>("change_score");
   const [etfTypeFilter, setEtfTypeFilter] = useState<EtfTypeFilter>("all");
   const [crossChartMetric, setCrossChartMetric] = useState<CrossChartMetric>("change_score");
@@ -201,13 +300,22 @@ function App() {
   const [periodMode, setPeriodMode] = useState<PeriodMode>("5");
   const [customStartDate, setCustomStartDate] = useState("");
   const [customEndDate, setCustomEndDate] = useState("");
-  const [chatMessages, setChatMessages] = useState<string[]>([
-    "최근 5영업일간 비중 변화 큰 종목 찾아줘",
-  ]);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
 
   useEffect(() => {
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    function stopResize() {
+      document.body.classList.remove("resizing-ai-panel");
+    }
+
+    window.addEventListener("mouseup", stopResize);
+    return () => window.removeEventListener("mouseup", stopResize);
+  }, []);
 
   useEffect(() => {
     function syncRoute() {
@@ -285,21 +393,31 @@ function App() {
     },
   });
 
-  const chat = useMutation({
-    mutationFn: (message: string) =>
-      api<{ message: string }>("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, ksd_fund: selectedFund }),
-      }),
-    onSuccess: (data) => setChatMessages((prev) => [...prev, data.message]),
-  });
-
   const rawSummaryRows = etfChangeSummary.data?.rows ?? [];
   const summaryRows = useMemo(() => filterSummaryRowsByEtfType(rawSummaryRows, etfTypeFilter), [etfTypeFilter, rawSummaryRows]);
   const pivotRows = pivot.data?.rows ?? [];
   const crossRows = crossEtfChanges.data?.rows ?? [];
   const pivotDates = pivot.data?.dates ?? [];
+  const actionCandidateEtfs = useMemo(
+    () => uniqueEtfCandidates(rawSummaryRows.map((item) => ({ ksd_fund: item.ksd_fund, etf_name: item.etf_name }))),
+    [rawSummaryRows],
+  );
+  const actionCandidateAssets = useMemo(
+    () =>
+      uniqueAssetCandidates([
+        ...crossRows.map((item) => ({ asset_code: item.asset_code, asset_name: item.asset_name })),
+        ...pivotRows.map((item) => ({ asset_code: item.asset_code, asset_name: item.asset_name })),
+        ...rawSummaryRows.flatMap((item) => [
+          item.max_quantity_increase,
+          item.max_quantity_decrease,
+          item.max_weight_increase,
+          item.max_weight_decrease,
+          item.max_valuation_increase,
+          item.max_valuation_decrease,
+        ].filter(Boolean).map((change) => ({ asset_code: change!.asset_code, asset_name: change!.asset_name }))),
+      ]),
+    [crossRows, pivotRows, rawSummaryRows],
+  );
   const selectedAsset = crossRows.find(
     (item) => item.asset_code === selectedAssetCode && (!selectedAssetName || item.asset_name === selectedAssetName),
   );
@@ -933,15 +1051,18 @@ function App() {
       summarySheet,
       1,
       summaryHeaders,
-      exposuresList.map((row) => [
-        row.etf_name,
-        row.end_quantity ?? null,
-        row.quantity_delta ?? null,
-        row.end_valuation_amount ?? null,
-        row.valuation_amount_delta ?? null,
-        row.end_weight ?? null,
-        row.weight_delta ?? null,
-      ])
+      exposuresList.map((row) => {
+        const isCashLike = isCashLikeHolding(selectedAssetCode, selectedAssetName);
+        return [
+          row.etf_name,
+          isCashLike ? null : row.end_quantity ?? null,
+          isCashLike ? null : row.quantity_delta ?? null,
+          isCashLike ? null : row.end_valuation_amount ?? null,
+          row.valuation_amount_delta ?? null,
+          row.end_weight ?? null,
+          row.weight_delta ?? null,
+        ];
+      })
     );
 
     // 3시트부터: 날짜순 개별 시트들
@@ -1083,17 +1204,253 @@ function App() {
     setSelectedDownloadFunds(checked ? summaryRows.map((item) => item.ksd_fund) : []);
   }
 
-  function submitChat(message: string) {
-    if (!message.trim()) return;
+  function handleChatBeforeSubmit(message: string) {
     if (message.includes("최근") && message.includes("비중 변화")) {
       navigateHome();
       queryClient.invalidateQueries({ queryKey: ["cross-etf-weight-changes"] });
       queryClient.invalidateQueries({ queryKey: ["etf-change-summary"] });
     }
-    setChatMessages((prev) => [...prev, message]);
-    chat.mutate(message);
-    setChatInput("");
   }
+
+  function buildChatContext(): ChatViewContext {
+    const filters: Record<string, string> = {
+      period_mode: periodMode,
+    };
+    if (analysisMode === "list") filters.etf_type = etfTypeFilter;
+    if (analysisMode === "cross") filters.asset_type = assetTypeFilter;
+
+    const context: ChatViewContext = {
+      mode: analysisMode,
+      period: periodLabel,
+      selected_fund: selectedFund,
+      selected_fund_name: selectedEtfName,
+      selected_asset: selectedAssetCode ? { asset_code: selectedAssetCode, asset_name: selectedAssetName || selectedAsset?.asset_name } : undefined,
+      chart_metric: getCurrentChartMetricLabel(analysisMode, etfChartMetric, detailChartMetric, crossChartMetric, assetChartMetric),
+      filters,
+      sections: [],
+      action_candidates: {
+        etfs: actionCandidateEtfs,
+        assets: actionCandidateAssets,
+      },
+    };
+
+    if (analysisMode === "list") {
+      context.sections.push({
+        title: "ETF별 변동 상위",
+        rows: summaryRows.slice(0, 10).map((row) => ({
+          ETF: row.etf_name,
+          KSD: row.ksd_fund,
+          변동점수: metricValue(row.change_score, row.change_score.toFixed(2)),
+          수량증가: row.max_quantity_increase ? `${row.max_quantity_increase.asset_name} ${formatSignedPercent(row.max_quantity_increase.value)}` : "-",
+          수량감소: row.max_quantity_decrease ? `${row.max_quantity_decrease.asset_name} ${formatSignedPercent(row.max_quantity_decrease.value)}` : "-",
+          비중증가: row.max_weight_increase ? `${row.max_weight_increase.asset_name} ${formatSignedPercentPoint(row.max_weight_increase.value)}` : "-",
+          비중감소: row.max_weight_decrease ? `${row.max_weight_decrease.asset_name} ${formatSignedPercentPoint(row.max_weight_decrease.value)}` : "-",
+        })),
+      });
+    } else if (analysisMode === "single") {
+      context.sections.push({
+        title: "선택 ETF 구성종목 변화",
+        rows: topByAbs(pivotRows, (row) => row.weight_delta, 10).map((row) => {
+          const startQuantity = detailStartDate ? row.quantities[detailStartDate] : null;
+          const endQuantity = detailEndDate ? row.quantities[detailEndDate] : null;
+          const startAmount = detailStartDate ? row.valuation_amounts[detailStartDate] : null;
+          const endAmount = detailEndDate ? row.valuation_amounts[detailEndDate] : null;
+          return {
+            종목명: row.asset_name,
+            자산코드: row.asset_code,
+            수량변화율: metricValue(
+              getInterpretableDeltaPct(startQuantity, endQuantity, row.asset_code, row.asset_name),
+              formatSignedPercent(getInterpretableDeltaPct(startQuantity, endQuantity, row.asset_code, row.asset_name)),
+            ),
+            금액변화율: metricValue(
+              getInterpretableDeltaPct(startAmount, endAmount, row.asset_code, row.asset_name),
+              formatSignedPercent(getInterpretableDeltaPct(startAmount, endAmount, row.asset_code, row.asset_name)),
+            ),
+            비중변화: metricValue(row.weight_delta, formatSignedPercentPoint(row.weight_delta)),
+          };
+        }),
+      });
+    } else if (analysisMode === "cross") {
+      context.sections.push({
+        title: "종목별 비중 변화 절대값 상위",
+        rows: crossDisplayRows.slice(0, 10).map((row) => ({
+          종목명: row.asset_name,
+          자산코드: row.asset_code,
+          절대비중변화순위: crossDisplayRows.findIndex((item) => item.asset_code === row.asset_code && item.asset_name === row.asset_name) + 1,
+          변동점수: metricValue(getCrossChangeScore(row, crossScoreMaxes), getCrossChangeScore(row, crossScoreMaxes).toFixed(2)),
+          ETF수: row.latest_etf_count,
+          수량변화율: metricValue(
+            getInterpretableDeltaPct(row.start_quantity, row.end_quantity, row.asset_code, row.asset_name),
+            formatSignedPercent(getInterpretableDeltaPct(row.start_quantity, row.end_quantity, row.asset_code, row.asset_name)),
+          ),
+          비중변화: metricValue(row.weight_delta, formatSignedPercentPoint(row.weight_delta)),
+          최근노출: row.latest_exposures.map((item) => `${item.etf_name} ${formatPercent(item.weight)}`).join(", ") || "-",
+        })),
+      });
+    } else if (analysisMode === "asset") {
+      context.sections.push({
+        title: "자산 상세 ETF별 노출",
+        rows: (assetExposures.data?.rows ?? []).slice(0, 10).map((row) => ({
+          ETF: row.etf_name,
+          KSD: row.ksd_fund,
+          수량변화율: metricValue(
+            getInterpretableDeltaPct(row.start_quantity, row.end_quantity, selectedAssetCode, selectedAssetName),
+            formatSignedPercent(getInterpretableDeltaPct(row.start_quantity, row.end_quantity, selectedAssetCode, selectedAssetName)),
+          ),
+          금액변화율: metricValue(
+            getInterpretableDeltaPct(row.start_valuation_amount, row.end_valuation_amount, selectedAssetCode, selectedAssetName),
+            formatSignedPercent(getInterpretableDeltaPct(row.start_valuation_amount, row.end_valuation_amount, selectedAssetCode, selectedAssetName)),
+          ),
+          최근비중: metricValue(row.end_weight, formatPercent(row.end_weight)),
+          비중변화: metricValue(row.weight_delta, formatSignedPercentPoint(row.weight_delta)),
+        })),
+      });
+    }
+
+    return context;
+  }
+
+  function runChatAction(action: ChatAction) {
+    if (action.kind === "asset") {
+      navigateAsset(action.target as AssetRouteTarget);
+      return;
+    }
+    const target = action.target as { ksd_fund: string };
+    navigateEtf(target.ksd_fund);
+  }
+
+  const commandActionItems = useMemo<CommandPaletteItem[]>(() => {
+    return [
+      {
+        id: "collect-products",
+        group: "데이터 업데이트",
+        title: "TIGER ETF 상품 목록 업데이트",
+        subtitle: collectProducts.isPending ? "업데이트 중" : "전체 ETF 기본 목록을 다시 수집합니다.",
+        keywords: ["수집", "업데이트", "ETF목록", "상품"],
+        disabled: collectProducts.isPending,
+        run: () => collectProducts.mutate(),
+      },
+      {
+        id: "collect-recent-watchlist",
+        group: "데이터 업데이트",
+        title: `현재 기간 대표 ETF 상세 데이터 업데이트`,
+        subtitle: collectRecentWatchlist.isPending ? "업데이트 중" : `${periodLabel} 기준 대표 ETF 구성종목을 갱신합니다.`,
+        keywords: ["수집", "업데이트", "대표", "ETF상세", "기간"],
+        disabled: collectRecentWatchlist.isPending,
+        run: () => collectRecentWatchlist.mutate(),
+      },
+      {
+        id: "collect-selected-recent",
+        group: "데이터 업데이트",
+        title: "현재 ETF 상세 데이터 업데이트",
+        subtitle: collectRecentHoldings.isPending ? "업데이트 중" : `${selectedEtfName}의 ${periodLabel} 구성종목을 갱신합니다.`,
+        keywords: ["수집", "업데이트", "선택", "ETF상세", selectedEtfName],
+        disabled: collectRecentHoldings.isPending,
+        run: () => collectRecentHoldings.mutate(),
+      },
+      {
+        id: "collect-selected-latest",
+        group: "데이터 업데이트",
+        title: "현재 ETF 최신 구성종목 업데이트",
+        subtitle: collectHoldings.isPending ? "업데이트 중" : `${selectedEtfName}의 최신 구성종목 스냅샷을 갱신합니다.`,
+        keywords: ["수집", "업데이트", "선택", "최신", "구성종목", selectedEtfName],
+        disabled: collectHoldings.isPending,
+        run: () => collectHoldings.mutate(),
+      },
+      {
+        id: "refresh-current-view",
+        group: "데이터 업데이트",
+        title: "현재 화면 데이터 새로고침",
+        subtitle: "분석 API 캐시를 비우고 화면 데이터를 다시 가져옵니다.",
+        keywords: ["새로고침", "refresh", "reload", "캐시"],
+        run: () => {
+          queryClient.invalidateQueries({ queryKey: ["holdings-pivot"] });
+          queryClient.invalidateQueries({ queryKey: ["cross-etf-weight-changes"] });
+          queryClient.invalidateQueries({ queryKey: ["etf-change-summary"] });
+          queryClient.invalidateQueries({ queryKey: ["asset-exposures"] });
+        },
+      },
+    ];
+  }, [
+    collectProducts,
+    collectHoldings,
+    collectRecentHoldings,
+    collectRecentWatchlist,
+    periodLabel,
+    selectedEtfName,
+  ]);
+
+  const commandSearchItems = useMemo<CommandPaletteItem[]>(() => {
+    const etfSearchItems = uniqueEtfCandidates(rawSummaryRows.map((row) => ({ ksd_fund: row.ksd_fund, etf_name: row.etf_name })))
+      .slice(0, 80)
+      .map<CommandPaletteItem>((row) => ({
+        id: `etf:${row.ksd_fund}`,
+        group: "ETF 검색",
+        title: row.etf_name,
+        subtitle: "ETF 상세로 이동",
+        keywords: ["ETF", "검색", row.ksd_fund],
+        run: () => navigateEtf(row.ksd_fund),
+      }));
+
+    const assetSearchItems = uniqueAssetCandidates([
+      ...crossRows.map((row) => ({ asset_code: row.asset_code, asset_name: row.asset_name })),
+      ...pivotRows.map((row) => ({ asset_code: row.asset_code, asset_name: row.asset_name })),
+    ])
+      .filter((row) => Boolean(row.asset_name))
+      .slice(0, 120)
+      .map<CommandPaletteItem>((row) => ({
+        id: `asset:${row.asset_code}:${row.asset_name}`,
+        group: "종목 검색",
+        title: row.asset_name ?? row.asset_code,
+        subtitle: "종목 상세로 이동",
+        keywords: ["종목", "검색", row.asset_code],
+        run: () => navigateAsset(row),
+      }));
+
+    return [...etfSearchItems, ...assetSearchItems];
+  }, [
+    crossRows,
+    pivotRows,
+    rawSummaryRows,
+  ]);
+
+  const filteredCommandItems = useMemo(() => {
+    const isActionMode = commandQuery.trimStart().startsWith(">");
+    const rawQuery = isActionMode ? commandQuery.trimStart().slice(1) : commandQuery;
+    const query = normalizeCommandText(rawQuery);
+    const sourceItems = isActionMode ? commandActionItems : commandSearchItems;
+    const filtered = query
+      ? sourceItems.filter((item) =>
+          normalizeCommandText([item.title, item.subtitle, ...(item.keywords ?? [])].filter(Boolean).join(" ")).includes(query),
+        )
+      : sourceItems;
+    return filtered.slice(0, 40);
+  }, [commandActionItems, commandQuery, commandSearchItems]);
+
+  function closeCommandPalette() {
+    setCommandPaletteOpen(false);
+    setCommandQuery("");
+    setSelectedCommandIndex(0);
+  }
+
+  function runCommandItem(item: CommandPaletteItem) {
+    if (item.disabled) return;
+    item.run();
+    closeCommandPalette();
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        setCommandPaletteOpen(true);
+        setSelectedCommandIndex(0);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   function navigateCurrentRoot() {
     if (analysisMode === "cross" || analysisMode === "asset") {
@@ -1104,6 +1461,27 @@ function App() {
       return;
     }
     navigateHome();
+  }
+
+  function startAiPanelResize(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = aiPanelWidth;
+    document.body.classList.add("resizing-ai-panel");
+
+    function handleMove(moveEvent: PointerEvent) {
+      const nextWidth = startWidth + (startX - moveEvent.clientX);
+      setAiPanelWidth(clamp(nextWidth, 300, 680));
+    }
+
+    function handleUp() {
+      document.body.classList.remove("resizing-ai-panel");
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    }
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp, { once: true });
   }
 
   return (
@@ -1173,27 +1551,6 @@ function App() {
                   <option value="all">전체</option>
                 </select>
               </div>
-            </>
-          )}
-          {showDevTools && (
-            <>
-              <span className="toolbar-divider" aria-hidden="true" />
-              <button disabled={collectProducts.isPending} title="TIGER ETF 상품 목록 수집" onClick={() => collectProducts.mutate()}>
-                <Database size={16} />
-                <span>{collectProducts.isPending ? "수집 중" : "ETF 목록"}</span>
-              </button>
-              <button disabled={collectHoldings.isPending} title="선택 ETF의 최신 구성종목 수집" onClick={() => collectHoldings.mutate()}>
-                <RefreshCw size={16} />
-                <span>{collectHoldings.isPending ? "수집 중" : "구성종목"}</span>
-              </button>
-              <button disabled={collectRecentHoldings.isPending} title={`선택 ETF 최근 ${periodDays}영업일 구성종목 수집`} onClick={() => collectRecentHoldings.mutate()}>
-                <RefreshCw size={16} />
-                <span>{collectRecentHoldings.isPending ? "수집 중" : `선택 ETF ${periodDays}일`}</span>
-              </button>
-              <button disabled={collectRecentWatchlist.isPending} title={`대표 ETF 최근 ${periodDays}영업일 구성종목 수집`} onClick={() => collectRecentWatchlist.mutate()}>
-                <RefreshCw size={16} />
-                <span>{collectRecentWatchlist.isPending ? "수집 중" : `대표 ETF ${periodDays}일`}</span>
-              </button>
             </>
           )}
           {analysisMode === "single" && (
@@ -1290,6 +1647,17 @@ function App() {
           <span className="toolbar-divider" aria-hidden="true" />
           <button
             className="icon-button"
+            aria-label="명령 팔레트 열기"
+            title="명령 팔레트 (Ctrl+Shift+P)"
+            onClick={() => {
+              setCommandPaletteOpen(true);
+              setSelectedCommandIndex(0);
+            }}
+          >
+            <Command size={16} />
+          </button>
+          <button
+            className="icon-button"
             aria-label={theme === "dark" ? "라이트 테마로 전환" : "다크 테마로 전환"}
             title={theme === "dark" ? "라이트 테마" : "다크 테마"}
             onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
@@ -1299,7 +1667,10 @@ function App() {
         </div>
       </header>
 
-      <main className={aiPanelOpen ? "workspace" : "workspace ai-collapsed"}>
+      <main
+        className={aiPanelOpen ? "workspace" : "workspace ai-collapsed"}
+        style={aiPanelOpen ? ({ "--ai-panel-width": `${aiPanelWidth}px` } as React.CSSProperties) : undefined}
+      >
         <section className="analysis-canvas">
           <section className="pivot-panel canvas-section">
             <div className="pivot-grid-wrap">
@@ -1385,12 +1756,13 @@ function App() {
                         const startQuantity = detailStartDate ? item.quantities[detailStartDate] : null;
                         const endQuantity = detailEndDate ? item.quantities[detailEndDate] : null;
                         const quantityDelta = getDelta(startQuantity, endQuantity);
-                        const quantityDeltaPct = getDeltaPct(startQuantity, endQuantity);
+                        const quantityDeltaPct = getInterpretableDeltaPct(startQuantity, endQuantity, item.asset_code, item.asset_name);
                         const startAmount = detailStartDate ? item.valuation_amounts[detailStartDate] : null;
                         const endAmount = detailEndDate ? item.valuation_amounts[detailEndDate] : null;
                         const amountDelta = getDelta(startAmount, endAmount);
-                        const amountDeltaPct = getDeltaPct(startAmount, endAmount);
+                        const amountDeltaPct = getInterpretableDeltaPct(startAmount, endAmount, item.asset_code, item.asset_name);
                         const endWeight = detailEndDate ? item.weights[detailEndDate] : null;
+                        const isCashLike = isCashLikeHolding(item.asset_code, item.asset_name);
 
                         return (
                           <tr key={`${item.asset_code}-${item.asset_name}`}>
@@ -1399,10 +1771,10 @@ function App() {
                                 {item.asset_name}
                               </button>
                             </td>
-                            <td>{formatCompactNumber(endQuantity)}</td>
-                            <td className={getDeltaClass(quantityDelta)}>{formatSignedCompactNumber(quantityDelta)}</td>
+                            <td>{isCashLike ? "-" : formatQuantityNumber(endQuantity)}</td>
+                            <td className={isCashLike ? "" : getDeltaClass(quantityDelta)}>{isCashLike ? "-" : formatSignedQuantityNumber(quantityDelta)}</td>
                             <td className={getDeltaClass(quantityDeltaPct)}>{formatSignedPercent(quantityDeltaPct)}</td>
-                            <td>{formatKrw(endAmount)}</td>
+                            <td>{isCashLike ? "-" : formatKrw(endAmount)}</td>
                             <td className={getDeltaClass(amountDelta)}>{formatSignedKrw(amountDelta)}</td>
                             <td className={getDeltaClass(amountDeltaPct)}>{formatSignedPercent(amountDeltaPct)}</td>
                             <td>{formatPercent(endWeight)}</td>
@@ -1444,7 +1816,7 @@ function App() {
                     </thead>
                     <tbody>
                       {crossDisplayRows.map((item) => {
-                        const quantityDeltaPct = getDeltaPct(item.start_quantity, item.end_quantity);
+                        const quantityDeltaPct = getInterpretableDeltaPct(item.start_quantity, item.end_quantity, item.asset_code, item.asset_name);
                         const changeScore = getCrossChangeScore(item, crossScoreMaxes);
 
                         return (
@@ -1496,8 +1868,9 @@ function App() {
                     </thead>
                     <tbody>
                       {assetExposures.data.rows.map((row) => {
-                        const quantityDeltaPct = getDeltaPct(row.start_quantity, row.end_quantity);
-                        const amountDeltaPct = getDeltaPct(row.start_valuation_amount, row.end_valuation_amount);
+                        const quantityDeltaPct = getInterpretableDeltaPct(row.start_quantity, row.end_quantity, selectedAssetCode, selectedAssetName);
+                        const amountDeltaPct = getInterpretableDeltaPct(row.start_valuation_amount, row.end_valuation_amount, selectedAssetCode, selectedAssetName);
+                        const isCashLike = isCashLikeHolding(selectedAssetCode, selectedAssetName);
 
                         return (
                           <tr key={row.ksd_fund}>
@@ -1506,10 +1879,10 @@ function App() {
                                 {row.etf_name}
                               </button>
                             </td>
-                            <td>{formatCompactNumber(row.end_quantity)}</td>
-                            <td className={getDeltaClass(row.quantity_delta)}>{formatSignedCompactNumber(row.quantity_delta)}</td>
+                            <td>{isCashLike ? "-" : formatQuantityNumber(row.end_quantity)}</td>
+                            <td className={isCashLike ? "" : getDeltaClass(row.quantity_delta)}>{isCashLike ? "-" : formatSignedQuantityNumber(row.quantity_delta)}</td>
                             <td className={getDeltaClass(quantityDeltaPct)}>{formatSignedPercent(quantityDeltaPct)}</td>
-                            <td>{formatKrw(row.end_valuation_amount)}</td>
+                            <td>{isCashLike ? "-" : formatKrw(row.end_valuation_amount)}</td>
                             <td className={getDeltaClass(row.valuation_amount_delta)}>{formatSignedKrw(row.valuation_amount_delta)}</td>
                             <td className={getDeltaClass(amountDeltaPct)}>{formatSignedPercent(amountDeltaPct)}</td>
                             <td>{formatPercent(row.end_weight)}</td>
@@ -1608,55 +1981,43 @@ function App() {
         </section>
 
         {aiPanelOpen ? (
-          <aside className="ai-panel">
-            <div className="panel-title">
-              <span>
-                <Bot size={18} />
-                AI 분석 패널
-              </span>
-              <button className="panel-toggle" aria-label="AI 분석 패널 접기" title="패널 접기" onClick={() => setAiPanelOpen(false)}>
-                <PanelRightClose size={16} />
-              </button>
-            </div>
-            <button className="suggestion" onClick={() => submitChat("최근 5영업일간 비중 변화 큰 종목 찾아줘")}>
-              최근 5영업일간 비중 변화 큰 종목 찾아줘
-            </button>
-            <div className="insight-strip">
-              <div>
-                <span>분석 범위</span>
-                <strong>{periodLabel}</strong>
-              </div>
-              <div>
-                <span>랭킹 ETF</span>
-                <strong>{summaryRows.length}</strong>
-              </div>
-              <div>
-                <span>현재 모드</span>
-                <strong>{analysisMode === "list" ? "ETF별" : analysisMode === "single" ? "단일 ETF" : analysisMode === "asset" ? "종목 상세" : "종목별"}</strong>
-              </div>
-            </div>
-            <div className="chat-log">
-              {chatMessages.map((message, index) => (
-                <div className={index % 2 === 0 ? "chat user" : "chat assistant"} key={`${message}-${index}`}>
-                  {message}
-                </div>
-              ))}
-            </div>
-            <form
-              className="chat-input"
-              onSubmit={(event) => {
-                event.preventDefault();
-                submitChat(chatInput);
-              }}
-            >
-              <input value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="분석 요청 입력" />
-              <button>
-                <Send size={16} />
-              </button>
-            </form>
-          </aside>
+          <>
+            <div
+              className="ai-panel-resizer"
+              role="separator"
+              aria-label="AI 패널 너비 조절"
+              aria-orientation="vertical"
+            title="드래그해서 AI 패널 너비 조절"
+            onPointerDown={startAiPanelResize}
+            onDoubleClick={() => setAiPanelWidth(420)}
+          />
+            <aside className="ai-panel">
+              <ChatPanel
+                ref={chatPanelRef}
+                selectedFund={selectedFund}
+                periodLabel={periodLabel}
+                summaryCount={summaryRows.length}
+                currentModeLabel={analysisMode === "list" ? "ETF별" : analysisMode === "single" ? "단일 ETF" : analysisMode === "asset" ? "종목 상세" : "종목별"}
+                showDebugMeta={showDevTools}
+                buildContext={buildChatContext}
+                onAction={runChatAction}
+                onBeforeSubmit={handleChatBeforeSubmit}
+                onClose={() => setAiPanelOpen(false)}
+              />
+            </aside>
+          </>
         ) : null}
       </main>
+      <CommandPalette
+        open={commandPaletteOpen}
+        query={commandQuery}
+        items={filteredCommandItems}
+        selectedIndex={selectedCommandIndex}
+        onQueryChange={setCommandQuery}
+        onSelectedIndexChange={setSelectedCommandIndex}
+        onClose={closeCommandPalette}
+        onRun={runCommandItem}
+      />
     </div>
   );
 }
@@ -1676,8 +2037,18 @@ function getDeltaPct(startValue: number | null | undefined, endValue: number | n
   return ((endValue - startValue) / Math.abs(startValue)) * 100;
 }
 
+function getInterpretableDeltaPct(
+  startValue: number | null | undefined,
+  endValue: number | null | undefined,
+  assetCode: string | null | undefined,
+  assetName: string | null | undefined,
+) {
+  if (isCashLikeHolding(assetCode, assetName)) return null;
+  return getDeltaPct(startValue, endValue);
+}
+
 function getDeltaClass(value: number | null | undefined) {
-  if (value === null || value === undefined || value === 0) return "";
+  if (isZeroLike(value)) return "";
   return value > 0 ? "positive" : "negative";
 }
 
@@ -1687,8 +2058,22 @@ function formatCompactNumber(value: number | null | undefined) {
 }
 
 function formatSignedCompactNumber(value: number | null | undefined) {
-  if (value === null || value === undefined || value === 0) return "-";
+  if (isZeroLike(value)) return "-";
   const formatted = formatCompactNumber(Math.abs(value));
+  return `${value > 0 ? "+" : "-"}${formatted}`;
+}
+
+function formatQuantityNumber(value: number | null | undefined) {
+  if (value === null || value === undefined) return "-";
+  if (Math.abs(value) > 0 && Math.abs(value) < 10) {
+    return value.toLocaleString("ko-KR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  }
+  return formatCompactNumber(value);
+}
+
+function formatSignedQuantityNumber(value: number | null | undefined) {
+  if (isZeroLike(value)) return "-";
+  const formatted = formatQuantityNumber(Math.abs(value));
   return `${value > 0 ? "+" : "-"}${formatted}`;
 }
 
@@ -1698,23 +2083,620 @@ function formatPercent(value: number | null | undefined) {
 }
 
 function formatSignedPercent(value: number | null | undefined) {
-  if (value === null || value === undefined || value === 0) return "-";
+  if (isZeroLike(value)) return "-";
   return `${value > 0 ? "+" : "-"}${Math.abs(value).toFixed(2)}%`;
 }
 
 function formatSignedPercentOrDash(value: number | null | undefined) {
-  if (value === null || value === undefined || value === 0) return "-";
+  if (isZeroLike(value)) return "-";
   return formatSignedPercent(value);
 }
 
 function formatSignedPercentPoint(value: number | null | undefined) {
-  if (value === null || value === undefined || value === 0) return "-";
+  if (isZeroLike(value)) return "-";
   return `${value > 0 ? "+" : "-"}${Math.abs(value).toFixed(2)}%p`;
 }
 
 function formatSignedPercentPointOrDash(value: number | null | undefined) {
-  if (value === null || value === undefined || value === 0) return "-";
+  if (isZeroLike(value)) return "-";
   return formatSignedPercentPoint(value);
+}
+
+function isZeroLike(value: number | null | undefined, epsilon = 1e-9): value is null | undefined {
+  return value === null || value === undefined || Math.abs(value) <= epsilon;
+}
+
+function metricValue(raw: number | null | undefined, label: string) {
+  return {
+    raw: raw ?? null,
+    label,
+  };
+}
+
+function topByAbs<T>(rows: T[], value: (row: T) => number | null | undefined, limit: number) {
+  return rows
+    .filter((row) => {
+      const metric = value(row);
+      return metric !== null && metric !== undefined && metric !== 0;
+    })
+    .slice()
+    .sort((a, b) => Math.abs(value(b) ?? 0) - Math.abs(value(a) ?? 0))
+    .slice(0, limit);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getCurrentChartMetricLabel(
+  mode: AnalysisMode,
+  etfMetric: EtfChartMetric,
+  detailMetric: DetailChartMetric,
+  crossMetric: CrossChartMetric,
+  assetMetric: AssetChartMetric,
+) {
+  if (mode === "list") return getEtfChartMetric(etfMetric).axisName;
+  if (mode === "single") return getDetailChartLabel(detailMetric);
+  if (mode === "cross") return getCrossChartMetric(crossMetric).label;
+  return getAssetChartMetric(assetMetric).label;
+}
+
+type ChatPanelProps = {
+  selectedFund: string;
+  periodLabel: string;
+  summaryCount: number;
+  currentModeLabel: string;
+  showDebugMeta: boolean;
+  buildContext: () => ChatViewContext;
+  onAction: (action: ChatAction) => void;
+  onBeforeSubmit: (message: string) => void;
+  onClose: () => void;
+};
+
+type ChatPanelHandle = {
+  resetChat: () => void;
+  focusInput: () => void;
+  downloadChat: () => void;
+  hasMessages: () => boolean;
+};
+
+type CommandPaletteItem = {
+  id: string;
+  group: string;
+  title: string;
+  subtitle?: string;
+  keywords?: string[];
+  disabled?: boolean;
+  run: () => void;
+};
+
+const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel({
+  selectedFund,
+  periodLabel,
+  summaryCount,
+  currentModeLabel,
+  showDebugMeta,
+  buildContext,
+  onAction,
+  onBeforeSubmit,
+  onClose,
+}: ChatPanelProps, ref) {
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isChatStreaming, setIsChatStreaming] = useState(false);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
+  const exampleQuestions = [
+    "최근 5영업일간 변동이 큰 ETF 5개만 요약해줘",
+    "TIGER 미국나스닥100 구성종목에서 뭐가 크게 바뀌었어?",
+    "최근 5영업일간 비중 변화 큰 종목 찾아줘",
+    "SK하이닉스는 어떤 ETF에서 비중 변화가 컸어?",
+    "이 화면에서 눈에 띄는 변화만 3개 알려줘",
+  ];
+
+  async function submitChat(message: string) {
+    if (isChatStreaming) return;
+    if (!message.trim()) return;
+    onBeforeSubmit(message);
+    const trimmed = message.trim();
+    const viewContext = buildContext();
+    const history = buildChatHistory(chatMessages);
+    const assistantId = newChatId();
+    let assistantContent = "";
+    const abortController = new AbortController();
+    chatAbortRef.current = abortController;
+    setChatMessages((prev) => [
+      ...prev,
+      { id: newChatId(), role: "user", content: trimmed },
+      { id: assistantId, role: "assistant", content: "데이터를 확인하는 중입니다...", actions: [] },
+    ]);
+    setChatInput("");
+    setIsChatStreaming(true);
+    try {
+      await streamChat(
+        { message: trimmed, ksd_fund: selectedFund, view_context: viewContext, history },
+        (chunk) => {
+          assistantContent += chunk;
+          startTransition(() => {
+            setChatMessages((prev) =>
+              prev.map((item) =>
+                item.id === assistantId
+                  ? { ...item, content: assistantContent || "분석 중입니다..." }
+                  : item,
+              ),
+            );
+          });
+        },
+        abortController.signal,
+      );
+      setChatMessages((prev) =>
+        prev.map((item) =>
+          item.id === assistantId
+            ? { ...item, content: assistantContent.trim() || "응답 내용이 비어 있습니다.", actions: [] }
+            : item,
+        ),
+      );
+    } catch (error) {
+      if (abortController.signal.aborted) {
+        const stoppedMessage = `${assistantContent.trim() || "응답 생성이 시작되기 전에 중단되었습니다."}\n\n응답 생성을 중단했습니다.`;
+        setChatMessages((prev) =>
+          prev.map((item) => (item.id === assistantId ? { ...item, content: stoppedMessage, actions: [] } : item)),
+        );
+        return;
+      }
+      const errorMessage = `응답을 가져오지 못했습니다. ${error instanceof Error ? error.message : ""}`.trim();
+      setChatMessages((prev) => prev.map((item) => (item.id === assistantId ? { ...item, content: errorMessage } : item)));
+    } finally {
+      if (chatAbortRef.current === abortController) {
+        chatAbortRef.current = null;
+      }
+      setIsChatStreaming(false);
+    }
+  }
+
+  function buildChatHistory(messages: ChatMessage[]): { role: ChatRole; content: string }[] {
+    return messages
+      .filter((message) => message.content.trim())
+      .slice(-8)
+      .map((message) => ({
+        role: message.role,
+        content: message.content.trim().slice(0, 1200),
+      }));
+  }
+
+  function resetChat() {
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = null;
+    setChatMessages([]);
+    setChatInput("");
+    setIsChatStreaming(false);
+    if (chatInputRef.current) {
+      chatInputRef.current.style.height = "auto";
+    }
+    chatInputRef.current?.focus();
+  }
+
+  function stopChat() {
+    chatAbortRef.current?.abort();
+  }
+
+  function focusInput() {
+    chatInputRef.current?.focus();
+  }
+
+  function resizeChatInput() {
+    const input = chatInputRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
+  }
+
+  function downloadChat() {
+    if (!chatMessages.length) {
+      focusInput();
+      return;
+    }
+    const createdAt = new Date();
+    const lines = [
+      "# AI 채팅 기록",
+      "",
+      `- 생성일시: ${formatDateTime(createdAt)}`,
+      `- 화면: ${currentModeLabel}`,
+      `- 기간: ${periodLabel}`,
+      "",
+      ...chatMessages.flatMap((message) => [
+        `## ${message.role === "user" ? "사용자" : "AI"}`,
+        "",
+        message.content.trim(),
+        "",
+      ]),
+    ];
+    downloadTextFile(`ai_chat_${formatFileTimestamp(createdAt)}.md`, lines.join("\n"));
+  }
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      resetChat,
+      focusInput,
+      downloadChat,
+      hasMessages: () => chatMessages.length > 0,
+    }),
+    [chatMessages, currentModeLabel, periodLabel],
+  );
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const key = event.key.toLowerCase();
+      if (event.ctrlKey && event.shiftKey && key === "o") {
+        event.preventDefault();
+        resetChat();
+        return;
+      }
+      if (event.ctrlKey && (key === "l" || (event.shiftKey && key === "l"))) {
+        event.preventDefault();
+        focusInput();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      chatAbortRef.current?.abort();
+    };
+  }, []);
+
+  return (
+    <>
+      <div className="panel-title">
+        <span>
+          <Bot size={18} />
+          AI 분석 패널
+        </span>
+        <div className="panel-actions">
+          <button className="panel-toggle" aria-label="새 채팅" title="새 채팅 (Ctrl+Shift+O)" onClick={resetChat}>
+            <RotateCcw size={16} />
+          </button>
+          <button className="panel-toggle" aria-label="AI 분석 패널 접기" title="패널 접기" onClick={onClose}>
+            <PanelRightClose size={16} />
+          </button>
+        </div>
+      </div>
+      {!chatMessages.length ? (
+        <div className="example-prompts" aria-label="예시 질문">
+          {exampleQuestions.map((example) => (
+            <button key={example} disabled={isChatStreaming} onClick={() => void submitChat(example)}>
+              {example}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {showDebugMeta ? (
+        <div className="insight-strip">
+          <div>
+            <span>분석 범위</span>
+            <strong>{periodLabel}</strong>
+          </div>
+          <div>
+            <span>랭킹 ETF</span>
+            <strong>{summaryCount}</strong>
+          </div>
+          <div>
+            <span>현재 모드</span>
+            <strong>{currentModeLabel}</strong>
+          </div>
+        </div>
+      ) : null}
+      <div className="chat-log">
+        {chatMessages.map((message) => (
+          <div className={`chat ${message.role}`} key={message.id}>
+            {message.role === "assistant" ? <MarkdownText content={message.content} /> : message.content}
+            {message.actions?.length ? (
+              <div className="chat-actions">
+                {message.actions.map((action) => (
+                  <button key={`${action.kind}-${action.label}`} onClick={() => onAction(action)}>
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <ul className="ai-disclaimer">
+        <li>AI 답변은 부정확할 수 있으니 원본 데이터를 함께 확인하세요.</li>
+        <li>이 서비스는 채팅 내용을 별도로 수집하지 않지만, AI 제공자 정책에 따라 수집·처리될 수 있으니 민감정보 입력은 피하세요.</li>
+        <li>투자 판단과 책임은 사용자에게 있으며, AI는 매수·매도 결정을 대신하지 않습니다.</li>
+      </ul>
+      <form
+        className="chat-input"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submitChat(chatInput);
+        }}
+      >
+        <textarea
+          ref={chatInputRef}
+          rows={1}
+          value={chatInput}
+          onChange={(event) => {
+            setChatInput(event.target.value);
+            resizeChatInput();
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            void submitChat(chatInput);
+          }}
+          placeholder="분석 요청 입력"
+          title="Enter 전송, Shift+Enter 줄바꿈"
+        />
+        <button
+          type={isChatStreaming ? "button" : "submit"}
+          className={isChatStreaming ? "stop-button" : undefined}
+          disabled={!isChatStreaming && !chatInput.trim()}
+          title={isChatStreaming ? "응답 생성 중단" : "전송"}
+          onClick={isChatStreaming ? stopChat : undefined}
+        >
+          {isChatStreaming ? <Square size={14} fill="currentColor" /> : <Send size={16} />}
+        </button>
+      </form>
+    </>
+  );
+});
+
+function CommandPalette({
+  open,
+  query,
+  items,
+  selectedIndex,
+  onQueryChange,
+  onSelectedIndexChange,
+  onClose,
+  onRun,
+}: {
+  open: boolean;
+  query: string;
+  items: CommandPaletteItem[];
+  selectedIndex: number;
+  onQueryChange: (value: string) => void;
+  onSelectedIndexChange: (value: number) => void;
+  onClose: () => void;
+  onRun: (item: CommandPaletteItem) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const activeIndex = items.length ? clamp(selectedIndex, 0, items.length - 1) : 0;
+
+  useEffect(() => {
+    if (!open) return;
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector<HTMLElement>(".command-item.active")?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [activeIndex, items, open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="command-palette-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="command-palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label="명령 팔레트"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="command-input-row">
+          <Search size={18} />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(event) => {
+              onQueryChange(event.target.value);
+              onSelectedIndexChange(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onClose();
+                return;
+              }
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                onSelectedIndexChange(items.length ? (activeIndex + 1) % items.length : 0);
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                onSelectedIndexChange(items.length ? (activeIndex - 1 + items.length) % items.length : 0);
+                return;
+              }
+              if (event.key === "Enter" && items[activeIndex]) {
+                event.preventDefault();
+                onRun(items[activeIndex]);
+              }
+            }}
+            placeholder="ETF/종목 검색, 명령은 > 입력"
+          />
+          <span className="command-kbd">Ctrl Shift P</span>
+        </div>
+        <div className="command-list" role="listbox" ref={listRef}>
+          {items.length ? (
+            items.map((item, index) => {
+              const showGroup = index === 0 || items[index - 1]?.group !== item.group;
+              return (
+                <React.Fragment key={item.id}>
+                  {showGroup ? <div className="command-group">{item.group}</div> : null}
+                  <button
+                    className={index === activeIndex ? "command-item active" : "command-item"}
+                    disabled={item.disabled}
+                    role="option"
+                    aria-selected={index === activeIndex}
+                    onMouseEnter={() => onSelectedIndexChange(index)}
+                    onClick={() => onRun(item)}
+                  >
+                    <span>{item.title}</span>
+                    {item.subtitle ? <small>{item.subtitle}</small> : null}
+                  </button>
+                </React.Fragment>
+              );
+            })
+          ) : (
+            <div className="command-empty">일치하는 명령이나 검색 결과가 없습니다.</div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function buildChatActions(content: string, viewContext: ChatViewContext, userMessage = "") {
+  const actions: ChatAction[] = [];
+  const seen = new Set<string>();
+  const preferEtfActions = isEtfListQuestion(userMessage);
+  const preferTargetEtfFirst = preferEtfActions || isEtfDetailQuestion(userMessage);
+
+  function addEtfAction(etf: { ksd_fund: string; etf_name: string }) {
+    const key = `etf:${etf.ksd_fund}`;
+    if (seen.has(key) || isCurrentEtfAction(etf, viewContext)) return;
+    seen.add(key);
+    actions.push({
+      kind: "etf",
+      label: `${etf.etf_name} 보기`,
+      target: { ksd_fund: etf.ksd_fund },
+    });
+  }
+
+  if (preferTargetEtfFirst) {
+    for (const section of viewContext.sections) {
+      for (const row of section.rows) {
+        const etfName = typeof row["ETF"] === "string" ? row["ETF"] : undefined;
+        const ksdFund = typeof row["KSD"] === "string" ? row["KSD"] : undefined;
+        if (etfName && ksdFund && content.includes(etfName)) {
+          addEtfAction({ ksd_fund: ksdFund, etf_name: etfName });
+          if (actions.length >= 3) return actions;
+        }
+      }
+    }
+
+    const matchedEtfNames = new Set<string>();
+    for (const etf of viewContext.action_candidates?.etfs ?? []) {
+      if (!content.includes(etf.etf_name)) continue;
+      if ([...matchedEtfNames].some((matchedName) => matchedName.includes(etf.etf_name))) continue;
+      matchedEtfNames.add(etf.etf_name);
+      addEtfAction(etf);
+      if (actions.length >= 3) return actions;
+    }
+    if (preferEtfActions) return actions;
+  }
+
+  for (const asset of viewContext.action_candidates?.assets ?? []) {
+    if (!asset.asset_name || !content.includes(asset.asset_name) || isBlockedAssetAction(asset, viewContext)) continue;
+    const key = `asset:${asset.asset_code}:${asset.asset_name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    actions.push({
+      kind: "asset",
+      label: `${asset.asset_name} 상세`,
+      target: asset,
+    });
+    if (actions.length >= 3) return actions;
+  }
+
+  const matchedEtfNames = new Set<string>();
+  for (const etf of viewContext.action_candidates?.etfs ?? []) {
+    if (!content.includes(etf.etf_name)) continue;
+    if ([...matchedEtfNames].some((matchedName) => matchedName.includes(etf.etf_name))) continue;
+    matchedEtfNames.add(etf.etf_name);
+    addEtfAction(etf);
+    if (actions.length >= 3) return actions;
+  }
+
+  for (const section of viewContext.sections) {
+    for (const row of section.rows) {
+      const assetName = typeof row["종목명"] === "string" ? row["종목명"] : undefined;
+      const assetCode = typeof row["자산코드"] === "string" ? row["자산코드"] : undefined;
+      if (assetName && assetCode && content.includes(assetName) && !isBlockedAssetAction({ asset_code: assetCode, asset_name: assetName }, viewContext)) {
+        const key = `asset:${assetCode}:${assetName}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          actions.push({
+            kind: "asset",
+            label: `${assetName} 상세`,
+            target: { asset_code: assetCode, asset_name: assetName },
+          });
+        }
+      }
+
+      const etfName = typeof row["ETF"] === "string" ? row["ETF"] : undefined;
+      const ksdFund = typeof row["KSD"] === "string" ? row["KSD"] : undefined;
+      if (etfName && ksdFund && content.includes(etfName)) {
+        addEtfAction({ ksd_fund: ksdFund, etf_name: etfName });
+      }
+
+      if (actions.length >= 3) return actions;
+    }
+  }
+  return actions;
+}
+
+function isCurrentEtfAction(etf: { ksd_fund: string; etf_name: string }, viewContext: ChatViewContext) {
+  return Boolean(
+    viewContext.mode === "single" &&
+      viewContext.selected_fund &&
+      (etf.ksd_fund === viewContext.selected_fund || etf.etf_name === viewContext.selected_fund_name),
+  );
+}
+
+function isBlockedAssetAction(asset: AssetRouteTarget, viewContext: ChatViewContext) {
+  if (isCashLikeHolding(asset.asset_code, asset.asset_name)) return true;
+  return Boolean(
+    viewContext.mode === "asset" &&
+      viewContext.selected_asset &&
+      asset.asset_code === viewContext.selected_asset.asset_code &&
+      (!viewContext.selected_asset.asset_name || asset.asset_name === viewContext.selected_asset.asset_name),
+  );
+}
+
+function isEtfListQuestion(message: string) {
+  const normalized = message.replace(/\s+/g, "").toLowerCase();
+  const hasEtf = normalized.includes("etf");
+  const hasListIntent = ["목록", "랭킹", "순위", "상위", "큰", "요약", "변동"].some((token) => normalized.includes(token));
+  const hasDetailIntent = ["구성종목", "상세", "종목"].some((token) => normalized.includes(token));
+  return hasEtf && hasListIntent && !hasDetailIntent;
+}
+
+function isEtfDetailQuestion(message: string) {
+  const normalized = message.replace(/\s+/g, "").toLowerCase();
+  return normalized.includes("etf") && ["구성종목", "상세", "뭐가", "바뀌"].some((token) => normalized.includes(token));
+}
+
+function uniqueEtfCandidates(items: EtfRouteTarget[]) {
+  const byFund = new Map<string, EtfRouteTarget>();
+  for (const item of items) {
+    if (!item.ksd_fund || !item.etf_name || byFund.has(item.ksd_fund)) continue;
+    byFund.set(item.ksd_fund, item);
+  }
+  return [...byFund.values()].sort((a, b) => b.etf_name.length - a.etf_name.length);
+}
+
+function uniqueAssetCandidates(items: AssetRouteTarget[]) {
+  const byAsset = new Map<string, AssetRouteTarget>();
+  for (const item of items) {
+    if (!item.asset_code || !item.asset_name) continue;
+    const key = `${item.asset_code}:${item.asset_name}`;
+    if (byAsset.has(key)) continue;
+    byAsset.set(key, item);
+  }
+  return [...byAsset.values()];
 }
 
 function formatExtremeValue(value: number, suffix: string) {
@@ -1733,7 +2715,7 @@ function formatKrw(value: number | null | undefined) {
 }
 
 function formatSignedKrw(value: number | null | undefined) {
-  if (value === null || value === undefined || value === 0) return "-";
+  if (isZeroLike(value)) return "-";
   const formatted = formatKrw(Math.abs(value));
   return `${value > 0 ? "+" : "-"}${formatted}`;
 }
@@ -2236,6 +3218,32 @@ function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function formatDateTime(value: Date) {
+  return `${value.getFullYear()}-${pad2(value.getMonth() + 1)}-${pad2(value.getDate())} ${pad2(value.getHours())}:${pad2(value.getMinutes())}:${pad2(value.getSeconds())}`;
+}
+
+function formatFileTimestamp(value: Date) {
+  return `${value.getFullYear()}${pad2(value.getMonth() + 1)}${pad2(value.getDate())}_${pad2(value.getHours())}${pad2(value.getMinutes())}${pad2(value.getSeconds())}`;
+}
+
+function pad2(value: number) {
+  return value.toString().padStart(2, "0");
+}
+
+function downloadTextFile(fileName: string, content: string) {
+  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function normalizeCommandText(value: string) {
+  return value.toLowerCase().replace(/\s+/g, "");
+}
+
 function parseRoute(): { mode: AnalysisMode; ksdFund?: string; assetCode?: string; assetName?: string } {
   const hash = window.location.hash.replace(/^#/, "");
   const etfMatch = hash.match(/^\/etf\/([^/]+)$/);
@@ -2616,14 +3624,15 @@ function buildDetailSummaryExportRows(rows: PivotRow[], dates: string[]) {
     const endQuantity = item.quantities[endDate] ?? null;
     const startAmount = item.valuation_amounts[startDate] ?? null;
     const endAmount = item.valuation_amounts[endDate] ?? null;
+    const isCashLike = isCashLikeHolding(item.asset_code, item.asset_name);
     return {
       종목명: item.asset_name,
-      최근수량: endQuantity,
-      수량변화: getDelta(startQuantity, endQuantity),
-      수량변화율: getDeltaPct(startQuantity, endQuantity),
-      최근금액: endAmount,
+      최근수량: isCashLike ? null : endQuantity,
+      수량변화: isCashLike ? null : getDelta(startQuantity, endQuantity),
+      수량변화율: getInterpretableDeltaPct(startQuantity, endQuantity, item.asset_code, item.asset_name),
+      최근금액: isCashLike ? null : endAmount,
       금액변화: getDelta(startAmount, endAmount),
-      금액변화율: getDeltaPct(startAmount, endAmount),
+      금액변화율: getInterpretableDeltaPct(startAmount, endAmount, item.asset_code, item.asset_name),
       최근비중: item.weights[endDate] ?? null,
       비중변화: item.weight_delta,
     };
@@ -2695,6 +3704,121 @@ function EmptyState({ title, body }: { title: string; body: string }) {
       <span>{body}</span>
     </div>
   );
+}
+
+function MarkdownText({ content }: { content: string }) {
+  const blocks = parseMarkdownBlocks(content);
+  return (
+    <div className="markdown-content">
+      {blocks.map((block, index) => {
+        if (block.type === "heading") {
+          return <strong className="markdown-heading" key={index}>{renderInlineMarkdown(block.text)}</strong>;
+        }
+        if (block.type === "divider") {
+          return <hr className="markdown-divider" key={index} />;
+        }
+        if (block.type === "list") {
+          return (
+            <ul key={index}>
+              {block.items.map((item, itemIndex) => (
+                <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
+              ))}
+            </ul>
+          );
+        }
+        if (block.type === "table") {
+          return (
+            <div className="markdown-table-wrap" key={index}>
+              <table>
+                <thead>
+                  <tr>
+                    {block.headers.map((header, headerIndex) => (
+                      <th key={headerIndex}>{renderInlineMarkdown(header)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {block.headers.map((_, cellIndex) => (
+                        <td key={cellIndex}>{renderInlineMarkdown(row[cellIndex] ?? "")}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+        return <p key={index}>{renderInlineMarkdown(block.text)}</p>;
+      })}
+    </div>
+  );
+}
+
+type MarkdownBlock =
+  | { type: "heading"; text: string }
+  | { type: "divider" }
+  | { type: "paragraph"; text: string }
+  | { type: "list"; items: string[] }
+  | { type: "table"; headers: string[]; rows: string[][] };
+
+function parseMarkdownBlocks(content: string): MarkdownBlock[] {
+  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const blocks: MarkdownBlock[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) {
+      blocks.push({ type: "divider" });
+      index += 1;
+      continue;
+    }
+    if (line.startsWith("|") && lines[index + 1]?.replace(/\s/g, "").match(/^\|?:?-{3,}:?\|/)) {
+      const headers = splitMarkdownRow(line);
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index].startsWith("|")) {
+        rows.push(splitMarkdownRow(lines[index]));
+        index += 1;
+      }
+      blocks.push({ type: "table", headers, rows });
+      continue;
+    }
+    if (/^#{1,4}\s+/.test(line)) {
+      blocks.push({ type: "heading", text: line.replace(/^#{1,4}\s+/, "") });
+      index += 1;
+      continue;
+    }
+    if (/^[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^[-*]\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^[-*]\s+/, ""));
+        index += 1;
+      }
+      blocks.push({ type: "list", items });
+      continue;
+    }
+    blocks.push({ type: "paragraph", text: line });
+    index += 1;
+  }
+
+  return blocks;
+}
+
+function splitMarkdownRow(line: string) {
+  return line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function renderInlineMarkdown(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    }
+    return <React.Fragment key={index}>{part}</React.Fragment>;
+  });
 }
 
 function ExposureLinks({

@@ -201,7 +201,19 @@ def holdings_pivot(
     for item in by_asset.values():
         start_weight = item["weights"].get(start_date) or 0
         end_weight = item["weights"].get(end_date) or 0
+        start_quantity = item["quantities"].get(start_date)
+        end_quantity = item["quantities"].get(end_date)
+        start_valuation_amount = item["valuation_amounts"].get(start_date)
+        end_valuation_amount = item["valuation_amounts"].get(end_date)
         item["weight_delta"] = end_weight - start_weight
+        item["start_quantity"] = start_quantity
+        item["end_quantity"] = end_quantity
+        item["quantity_delta"] = _delta(start_quantity, end_quantity)
+        item["quantity_delta_ratio"] = _delta_ratio(start_quantity, end_quantity)
+        item["start_valuation_amount"] = start_valuation_amount
+        item["end_valuation_amount"] = end_valuation_amount
+        item["valuation_amount_delta"] = _delta(start_valuation_amount, end_valuation_amount)
+        item["valuation_amount_delta_ratio"] = _delta_ratio(start_valuation_amount, end_valuation_amount)
         pivot_rows.append(item)
 
     pivot_rows.sort(key=lambda item: abs(item["weight_delta"]), reverse=True)
@@ -601,6 +613,8 @@ def etf_change_summary(
         }
 
         for asset in assets.values():
+            if _is_cash_like_asset(asset["asset_code"], asset["asset_name"]):
+                continue
             start_quantity = asset["quantities"].get(start_date)
             end_quantity = asset["quantities"].get(end_date)
             quantity_change_pct = None
@@ -677,6 +691,18 @@ def _apply_change_scores(summaries: list[dict]) -> None:
         summary["change_score"] = round((score / active_weight) * 100, 2) if active_weight else 0
 
 
+def _delta(start_value: float | None, end_value: float | None) -> float | None:
+    if start_value is None or end_value is None:
+        return None
+    return end_value - start_value
+
+
+def _delta_ratio(start_value: float | None, end_value: float | None) -> float | None:
+    if start_value in (None, 0) or end_value is None:
+        return None
+    return ((end_value - start_value) / abs(start_value)) * 100
+
+
 def _assign_extreme(
     summary: dict,
     key: str,
@@ -701,6 +727,12 @@ def _assign_extreme(
             "start_value": start_value,
             "end_value": end_value,
         }
+
+
+def _is_cash_like_asset(asset_code: str | None, asset_name: str | None) -> bool:
+    code = (asset_code or "").upper()
+    name = asset_name or ""
+    return code.startswith("KRD") or any(token in name.upper() for token in ("원화예금", "예금", "현금", "CASH"))
 
 
 def asset_exposures(
@@ -779,6 +811,6 @@ def asset_exposures(
         }
         exposures.append(item)
 
-    exposures.sort(key=lambda x: x["end_weight"], reverse=True)
+    exposures.sort(key=lambda x: abs(x["weight_delta"]), reverse=True)
 
     return {"dates": dates, "rows": exposures}

@@ -283,7 +283,7 @@ function App() {
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("list");
-  const [aiPanelOpen, setAiPanelOpen] = useState(true);
+  const [aiPanelOpen, setAiPanelOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 980);
   const [aiPanelWidth, setAiPanelWidth] = useState(420);
   const [etfChartMetric, setEtfChartMetric] = useState<EtfChartMetric>("change_score");
   const [etfTypeFilter, setEtfTypeFilter] = useState<EtfTypeFilter>("all");
@@ -1527,7 +1527,7 @@ function App() {
         <div className={`toolbar toolbar-primary${mobileMenuOpen ? " mobile-open" : ""}`}>
           <div className={`toolbar-group period-toolbar-group${periodMode === "custom" ? " has-custom-range" : ""}`}>
             <span className="toolbar-label">기간:</span>
-            <select value={periodMode} onChange={(event) => setPeriodMode(event.target.value as PeriodMode)}>
+            <select aria-label="기간" value={periodMode} onChange={(event) => setPeriodMode(event.target.value as PeriodMode)}>
               <option value="5">최근 5영업일</option>
               <option value="10">최근 10영업일</option>
               <option value="20">최근 20영업일</option>
@@ -2497,6 +2497,7 @@ const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel
         <button
           type={isChatStreaming ? "button" : "submit"}
           className={isChatStreaming ? "stop-button" : undefined}
+          aria-label={isChatStreaming ? "응답 생성 중단" : "전송"}
           disabled={!isChatStreaming && !chatInput.trim()}
           title={isChatStreaming ? "응답 생성 중단" : "전송"}
           onClick={isChatStreaming ? stopChat : undefined}

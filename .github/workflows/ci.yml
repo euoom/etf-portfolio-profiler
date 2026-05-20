@@ -63,3 +63,46 @@ jobs:
 
       - name: Run tests
         run: uv run --python 3.13 pytest
+
+  e2e:
+    name: E2E integration
+    runs-on: ubuntu-latest
+    needs: [frontend, backend]
+    env:
+      ETF_PROFILER_DATA_DIR: ${{ github.workspace }}/.ci-e2e-data
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen --dev --python 3.13
+
+      - name: Run E2E tests
+        run: bash scripts/run-e2e.sh

@@ -95,6 +95,6 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_etf_ksd_fund ON etf(ksd_fund);
             CREATE INDEX IF NOT EXISTS idx_snapshot_etf_date ON etf_daily_snapshot(etf_id, base_date);
             CREATE INDEX IF NOT EXISTS idx_holding_asset_code ON etf_daily_holding(asset_code);
+            CREATE INDEX IF NOT EXISTS idx_holding_asset_code_name ON etf_daily_holding(asset_code, asset_name);
             """
         )
-

@@ -1,4 +1,6 @@
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +12,15 @@ from app.db.database import init_db
 
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="ETF Portfolio Profiler API")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    init_db()
+    yield
+
+
+app = FastAPI(title="ETF Portfolio Profiler API", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -34,12 +44,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
-
 
 @app.get("/health")
 def health() -> dict[str, str]:

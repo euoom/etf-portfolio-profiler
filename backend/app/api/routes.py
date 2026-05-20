@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.db.database import get_connection
 from app.llm.provider import get_provider
-from app.services.analysis import cross_etf_weight_changes, etf_change_summary, holdings_pivot, list_etfs, weight_changes
+from app.services.analysis import asset_exposures, cross_etf_weight_changes, etf_change_summary, holdings_pivot, list_etfs, weight_changes
 from app.services.storage import insert_holdings_snapshot, snapshot_exists, upsert_products
 from app.services.tiger_collector import TigerCollector, recent_weekdays
 
@@ -192,6 +192,25 @@ def get_cross_etf_weight_changes(days: int = 3, limit: int = 40, start_date: str
 def get_etf_change_summary(days: int = 3, limit: int = 100, start_date: str | None = None, end_date: str | None = None) -> dict:
     with get_connection() as conn:
         return etf_change_summary(conn, days=days, limit=limit, start_date=start_date, end_date=end_date)
+
+
+@router.get("/analysis/asset-exposures")
+def get_asset_exposures(
+    asset_code: str,
+    asset_name: str | None = None,
+    days: int = 3,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
+    with get_connection() as conn:
+        return asset_exposures(
+            conn,
+            asset_code=asset_code,
+            asset_name=asset_name,
+            days=days,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
 
 @router.post("/chat")

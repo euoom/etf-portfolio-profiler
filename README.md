@@ -1,23 +1,35 @@
 # etf-portfolio-profiler
 
-ETF holdings change profiler for Korean ETF brands, starting with TIGER and later KODEX.
+국내 ETF 편입 종목 변화를 수집하고 비교하는 프로파일러입니다. 현재는 TIGER ETF를 우선 지원하며, 이후 KODEX 등 다른 브랜드로 확장할 수 있도록 구성합니다.
+
+ETF holdings change profiler for Korean ETF brands. It starts with TIGER ETFs and is designed to expand to other brands such as KODEX.
 
 ## Stack
 
 - Backend: FastAPI, SQLite
 - Frontend: Vite, React, TypeScript
-- LLM POC: local CLI provider adapter
+- LLM POC: local CLI provider adapter / 로컬 CLI provider 어댑터
 
 ## Layout
 
 ```text
-backend/   FastAPI API, SQLite schema, TIGER collector, analysis services
-frontend/  Static React SPA
-data/      Local SQLite database location
-docs/      Design notes
+backend/   FastAPI API, SQLite schema, TIGER collector, analysis services / 백엔드 API와 수집/분석 서비스
+frontend/  Static React SPA / 정적 React SPA
+data/      Local SQLite database location / 로컬 SQLite 데이터베이스 위치
+docs/      Design notes / 설계 메모
 ```
 
+## Data Classification
+
+원천 데이터와 앱 내부 추론 분류의 경계는 `docs/data-classification.md`에 정리합니다.
+
+The boundary between source data and app-inferred classification fields is documented in `docs/data-classification.md`.
+
 ## Backend
+
+백엔드 개발 서버 실행:
+
+Run the backend development server:
 
 ```bash
 cd backend
@@ -25,11 +37,15 @@ uv sync
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
+로컬 백엔드와 설정된 ngrok 터널을 함께 실행:
+
 Run the local backend and the configured ngrok tunnel together:
 
 ```bash
 ./scripts/start-dev-tunnel.sh
 ```
+
+백엔드, 로컬 프론트엔드, ngrok 터널을 함께 실행:
 
 Run the backend, local frontend, and configured ngrok tunnel together:
 
@@ -37,12 +53,17 @@ Run the backend, local frontend, and configured ngrok tunnel together:
 ./scripts/start-dev-all.sh
 ```
 
+선택 환경변수 override:
+
 Optional environment overrides:
 
 ```bash
 PORT=8010 NGROK_TUNNEL=etf-portfolio-profiler-api ./scripts/start-dev-tunnel.sh
 PORT=8010 FRONTEND_PORT=5174 NGROK_TUNNEL=etf-portfolio-profiler-api ./scripts/start-dev-all.sh
+TIGER_REQUEST_DELAY_SECONDS=1.0 ./scripts/start-dev-tunnel.sh
 ```
+
+운영 백엔드를 실행하고 매일 업데이트를 확인:
 
 Run the production backend with a daily update check:
 
@@ -50,18 +71,28 @@ Run the production backend with a daily update check:
 ./scripts/start-prod.sh
 ```
 
-By default, `start-prod.sh` starts the backend and checks for updates every day at `04:00`. If a newer `master` commit exists, it applies the update, restarts the backend, and verifies `/health`. Override the update time or disable the built-in update loop with:
+기본값으로 `start-prod.sh`는 백엔드를 실행하고 매일 `04:00`에 업데이트를 확인합니다. 더 새로운 `master` 커밋이 있으면 업데이트를 적용하고, 백엔드를 재시작한 뒤 `/health`를 확인합니다.
+
+By default, `start-prod.sh` starts the backend and checks for updates every day at `04:00`. If a newer `master` commit exists, it applies the update, restarts the backend, and verifies `/health`.
+
+업데이트 시각을 바꾸거나 내장 업데이트 루프를 끌 수 있습니다:
+
+Override the update time or disable the built-in update loop:
 
 ```bash
 UPDATE_CHECK_TIME=03:30 ./scripts/start-prod.sh
 AUTO_UPDATE=false ./scripts/start-prod.sh
 ```
 
+동일한 pull-based 운영 업데이트를 한 번만 실행:
+
 Run the same pull-based production update once:
 
 ```bash
 ./scripts/update-prod.sh
 ```
+
+주요 엔드포인트:
 
 Useful endpoints:
 
@@ -76,9 +107,44 @@ GET  /api/analysis/holdings-pivot?ksd_fund=KR70183J0002&days=5
 POST /api/chat
 ```
 
+최근 TIGER 편입 종목 수집은 한국거래소 캘린더(`XKRX`)를 사용해 영업일 범위를 계산합니다. 이미 존재하는 스냅샷은 건너뛰고, 누락된 영업일만 요청합니다.
+
 Recent TIGER holdings use the Korea Exchange calendar (`XKRX`) for business-day ranges. Existing snapshots are skipped, and only missing business dates are requested.
 
+TIGER 요청은 기본적으로 연속 요청 사이에 `1.0`초 간격을 둡니다. `TIGER_REQUEST_DELAY_SECONDS`로 조정할 수 있습니다.
+
+TIGER requests are throttled with a default `1.0` second delay between consecutive requests. Configure it with `TIGER_REQUEST_DELAY_SECONDS`.
+
+종목별 자산군은 기본적으로 종목 코드와 이름 패턴으로 추정합니다. 잘못 분류된 항목은 `data/asset_classification_overrides.json`에서 수동 보정할 수 있습니다. `asset_type` 값은 `stock`, `listed_product`, `fixed_income`, `derivative`, `cash` 중 하나를 사용합니다.
+
+Asset groups in the cross-ETF asset view are inferred from asset code and name patterns by default. Correct misclassified assets in `data/asset_classification_overrides.json`. Use one of `stock`, `listed_product`, `fixed_income`, `derivative`, or `cash` for `asset_type`.
+
+```json
+{
+  "by_asset_code": {
+    "QQQ US EQUITY": {
+      "asset_type": "listed_product",
+      "note": "Invesco QQQ Trust Series 1 is an ETF-like listed product."
+    }
+  },
+  "by_asset_name": {
+    "예시 종목명": {
+      "asset_type": "stock",
+      "note": "Optional note for future review."
+    }
+  }
+}
+```
+
+ETF별 목록의 ETF 유형은 원천 `asset_class`, `category`, ETF 이름 패턴으로 추정합니다. 잘못 분류된 항목은 `data/etf_classification_overrides.json`에서 수동 보정할 수 있습니다. 자세한 기준은 `docs/data-classification.md`를 참고하세요.
+
+ETF types in the ETF list are inferred from source `asset_class`, `category`, and ETF name patterns. Correct misclassified ETFs in `data/etf_classification_overrides.json`. See `docs/data-classification.md` for the detailed rules.
+
 ## Frontend
+
+프론트엔드 개발 서버 실행:
+
+Run the frontend development server:
 
 ```bash
 cd frontend
@@ -86,17 +152,23 @@ npm install
 npm run dev
 ```
 
+프론트엔드는 기본적으로 API를 `http://localhost:8000`에서 찾습니다. 다음처럼 변경할 수 있습니다:
+
 The frontend expects the API at `http://localhost:8000` by default. Override with:
 
 ```bash
 VITE_API_BASE_URL=http://localhost:8000 npm run dev
 ```
 
+수동 수집 컨트롤은 기본적으로 숨겨져 있습니다. 로컬 개발에서 활성화하려면:
+
 Manual collection controls are hidden by default. Enable them for local development with:
 
 ```bash
 VITE_SHOW_DEV_TOOLS=true npm run dev
 ```
+
+주요 라우트:
 
 Useful routes:
 

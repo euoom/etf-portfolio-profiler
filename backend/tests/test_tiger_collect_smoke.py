@@ -11,7 +11,7 @@ def test_collect_tiger_products_one_item(monkeypatch) -> None:
             assert list_count == 1
             return [
                 TigerProduct(
-                    ksd_fund="KR70183J0002",
+                    ksd_fund="KRTEST000001",
                     name="TIGER test ETF",
                     ticker="0183J0",
                     asset_class="equity",

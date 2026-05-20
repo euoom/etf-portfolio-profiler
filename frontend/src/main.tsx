@@ -72,6 +72,8 @@ type CrossEtfRow = {
   asset_code: string;
   asset_name: string;
   asset_type?: AssetTypeFilter;
+  asset_class?: string;
+  category?: string;
   weights: Record<string, number>;
   avg_weights?: Record<string, number>;
   max_weights?: Record<string, number>;
@@ -131,6 +133,26 @@ type EtfChangeSummaryResponse = {
   rows: EtfChangeSummaryRow[];
 };
 
+type AssetExposureRow = {
+  ksd_fund: string;
+  etf_name: string;
+  start_quantity: number;
+  end_quantity: number;
+  quantity_delta: number;
+  start_valuation_amount: number;
+  end_valuation_amount: number;
+  valuation_amount_delta: number;
+  start_weight: number;
+  end_weight: number;
+  weight_delta: number;
+  history?: Record<string, { quantity: number; valuation_amount: number; weight: number }>;
+};
+
+type AssetExposuresResponse = {
+  dates: string[];
+  rows: AssetExposureRow[];
+};
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("ngrok-skip-browser-warning", "true");
@@ -167,6 +189,9 @@ function App() {
   const [listDownloadMode, setListDownloadMode] = useState(false);
   const [selectedDownloadFunds, setSelectedDownloadFunds] = useState<string[]>([]);
   const [isDownloadingList, setIsDownloadingList] = useState(false);
+  const [crossDownloadMode, setCrossDownloadMode] = useState(false);
+  const [selectedDownloadAssets, setSelectedDownloadAssets] = useState<string[]>([]);
+  const [isDownloadingCrossList, setIsDownloadingCrossList] = useState(false);
   const [periodMode, setPeriodMode] = useState<PeriodMode>("5");
   const [customStartDate, setCustomStartDate] = useState("");
   const [customEndDate, setCustomEndDate] = useState("");
@@ -214,6 +239,12 @@ function App() {
   const etfChangeSummary = useQuery({
     queryKey: ["etf-change-summary", analysisPeriodQuery],
     queryFn: () => api<EtfChangeSummaryResponse>(`/api/analysis/etf-change-summary?${analysisPeriodQuery}&limit=100`),
+  });
+
+  const assetExposures = useQuery({
+    queryKey: ["asset-exposures", selectedAssetCode, analysisPeriodQuery],
+    queryFn: () => api<AssetExposuresResponse>(`/api/analysis/asset-exposures?asset_code=${encodeURIComponent(selectedAssetCode)}&${analysisPeriodQuery}`),
+    enabled: analysisMode === "asset" && Boolean(selectedAssetCode),
   });
 
   const collectProducts = useMutation({
@@ -288,13 +319,17 @@ function App() {
       ? etfChangeSummary.isLoading
       : analysisMode === "single"
         ? pivot.isLoading || (pivot.isFetching && pivotRows.length === 0)
-        : crossEtfChanges.isLoading || (analysisMode === "asset" && crossEtfChanges.isFetching && !selectedAsset);
+        : analysisMode === "asset"
+          ? assetExposures.isLoading || (assetExposures.isFetching && !assetExposures.data)
+          : crossEtfChanges.isLoading;
   const isCurrentChartLoading =
     analysisMode === "list"
       ? etfChangeSummary.isLoading
       : analysisMode === "single"
         ? pivot.isLoading || (pivot.isFetching && pivotRows.length === 0)
-        : crossEtfChanges.isLoading || (analysisMode === "asset" && crossEtfChanges.isFetching && !selectedAsset);
+        : analysisMode === "asset"
+          ? assetExposures.isLoading || (assetExposures.isFetching && !assetExposures.data)
+          : crossEtfChanges.isLoading;
   const hasChartData =
     analysisMode === "list"
       ? summaryRows.length > 0
@@ -315,7 +350,18 @@ function App() {
       setListDownloadMode(false);
       setSelectedDownloadFunds([]);
     }
-  }, [analysisMode]);
+    if (analysisMode !== "cross") {
+      setCrossDownloadMode(false);
+      setSelectedDownloadAssets([]);
+    }
+    if (analysisMode === "asset") {
+      if (assetChartMetric === "max_weight") {
+        setAssetChartMetric("avg_weight");
+      } else if (assetChartMetric === "max_weight_delta") {
+        setAssetChartMetric("avg_weight_delta");
+      }
+    }
+  }, [analysisMode, assetChartMetric]);
 
   useEffect(() => {
     const currentFunds = new Set(summaryRows.map((item) => item.ksd_fund));
@@ -325,6 +371,15 @@ function App() {
   const selectedDownloadSet = useMemo(() => new Set(selectedDownloadFunds), [selectedDownloadFunds]);
   const allListRowsSelected = summaryRows.length > 0 && summaryRows.every((item) => selectedDownloadSet.has(item.ksd_fund));
   const partiallyListRowsSelected = selectedDownloadFunds.length > 0 && !allListRowsSelected;
+
+  useEffect(() => {
+    const currentAssets = new Set(crossDisplayRows.map((item) => item.asset_code));
+    setSelectedDownloadAssets((current) => current.filter((assetCode) => currentAssets.has(assetCode)));
+  }, [crossDisplayRows]);
+
+  const selectedCrossDownloadSet = useMemo(() => new Set(selectedDownloadAssets), [selectedDownloadAssets]);
+  const allCrossRowsSelected = crossDisplayRows.length > 0 && crossDisplayRows.every((item) => selectedCrossDownloadSet.has(item.asset_code));
+  const partiallyCrossRowsSelected = selectedDownloadAssets.length > 0 && !allCrossRowsSelected;
 
   const chartOption = useMemo(
     () => {
@@ -412,14 +467,51 @@ function App() {
       }
 
       if (analysisMode === "asset") {
-        const dates = crossEtfChanges.data?.dates ?? [];
-        const item = selectedAsset;
+        const dates = assetExposures.data?.dates ?? [];
+        const exposuresList = assetExposures.data?.rows ?? [];
         const metric = getAssetChartMetric(assetChartMetric);
+
+        const series = exposuresList.map((row) => {
+          return {
+            name: row.etf_name,
+            type: "line",
+            smooth: true,
+            symbolSize: 6,
+            data: dates.map((date) => {
+              const hist = row.history?.[date];
+              if (!hist) return 0;
+              if (assetChartMetric === "quantity") return hist.quantity;
+              if (assetChartMetric === "quantity_delta") return hist.quantity - (row.history?.[dates[0]]?.quantity ?? 0);
+              if (assetChartMetric === "quantity_delta_ratio") {
+                const startVal = row.history?.[dates[0]]?.quantity ?? 0;
+                return startVal ? ((hist.quantity - startVal) / Math.abs(startVal)) * 100 : 0;
+              }
+              if (assetChartMetric === "valuation_amount") return hist.valuation_amount;
+              if (assetChartMetric === "valuation_delta") return hist.valuation_amount - (row.history?.[dates[0]]?.valuation_amount ?? 0);
+              if (assetChartMetric === "valuation_delta_ratio") {
+                const startVal = row.history?.[dates[0]]?.valuation_amount ?? 0;
+                return startVal ? ((hist.valuation_amount - startVal) / Math.abs(startVal)) * 100 : 0;
+              }
+              if (assetChartMetric === "avg_weight" || assetChartMetric === "max_weight") {
+                return hist.weight;
+              }
+              if (assetChartMetric === "avg_weight_delta" || assetChartMetric === "max_weight_delta") {
+                return hist.weight - (row.history?.[dates[0]]?.weight ?? 0);
+              }
+              return hist.weight;
+            }),
+            connectNulls: true,
+          };
+        });
+
         return {
           backgroundColor: "transparent",
-          color: metric.colors(theme),
           textStyle: { color: theme === "dark" ? "#d7dde8" : "#334155" },
-          legend: { top: 0, textStyle: { color: theme === "dark" ? "#d7dde8" : "#334155" } },
+          legend: { 
+            top: 0, 
+            type: "scroll",
+            textStyle: { color: theme === "dark" ? "#d7dde8" : "#334155" } 
+          },
           tooltip: {
             trigger: "axis",
             backgroundColor: theme === "dark" ? "#181b20" : "#ffffff",
@@ -427,7 +519,7 @@ function App() {
             textStyle: { color: theme === "dark" ? "#f8fafc" : "#0f172a" },
             valueFormatter: (value: number) => metric.format(Number(value)),
           },
-          grid: { top: 56, right: 24, bottom: 32, left: 56 },
+          grid: { top: 56, right: 24, bottom: 32, left: 64 },
           xAxis: {
             type: "category",
             data: dates,
@@ -442,16 +534,7 @@ function App() {
             axisLabel: { color: theme === "dark" ? "#9aa4b2" : "#64748b", formatter: metric.axisFormatter },
             splitLine: { lineStyle: { color: theme === "dark" ? "#272b32" : "#e2e8f0" } },
           },
-          series: [
-            {
-              name: metric.label,
-              type: "line",
-              smooth: true,
-              symbolSize: 7,
-              data: dates.map((date) => metric.value(item, date, dates[0])),
-              connectNulls: true,
-            },
-          ],
+          series: series,
         };
       }
 
@@ -675,6 +758,260 @@ function App() {
     });
   }
 
+  async function downloadCrossWorkbook() {
+    if (analysisMode !== "cross" || !crossDisplayRows.length) return;
+
+    const ExcelJS = await import("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "ETF Portfolio Profiler";
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet("종목별 요약");
+
+    const headers = [
+      "종목명",
+      "자산코드",
+      "자산군",
+      "카테고리",
+      "최근 평균 비중(%)",
+      "평균 비중 변화(%p)",
+      "최근 최대 비중(%)",
+      "최대 비중 변화(%p)",
+      "최근 합산 비중(%)",
+      "합산 비중 변화(%p)",
+      "최근 편입 ETF 수"
+    ];
+
+    sheet.addRow(headers);
+
+    const getAssetClassLabel = (val: string | null | undefined) => {
+      if (!val) return "-";
+      const mapping: Record<string, string> = {
+        stock: "주식",
+        listed_product: "상장상품",
+        fixed_income: "채권/단기상품",
+        derivative: "선물/파생",
+        cash: "현금성",
+      };
+      return mapping[val] || val;
+    };
+
+    crossDisplayRows.forEach((row) => {
+      sheet.addRow([
+        row.asset_name,
+        row.asset_code,
+        getAssetClassLabel(row.asset_class),
+        row.category || "-",
+        row.end_avg_weight ?? null,
+        row.avg_weight_delta ?? null,
+        row.end_max_weight ?? null,
+        row.max_weight_delta ?? null,
+        row.end_weight ?? null,
+        row.weight_delta ?? null,
+        row.latest_etf_count ?? 0,
+      ]);
+    });
+
+    sheet.columns.forEach((column) => {
+      column.width = 16;
+    });
+    sheet.getColumn(1).width = 30;
+
+    const workbookBuffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([workbookBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `종목별_자산분석_요약_${periodLabel}.xlsx`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportAssetWorkbook({
+    asset,
+    dates,
+    exposuresList,
+  }: {
+    asset: CrossEtfRow;
+    dates: string[];
+    exposuresList: AssetExposureRow[];
+  }) {
+    const ExcelJS = await import("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "ETF Portfolio Profiler";
+    workbook.created = new Date();
+
+    // 1시트: "차트"
+    const chartSheet = workbook.addWorksheet("차트");
+    chartSheet.addRow([asset?.asset_name || "종목"]);
+    chartSheet.addRow([
+      `기간: ${periodLabel}`,
+      `차트: ${assetChartMetric === "avg_weight" ? "편입 비중(%)" : "비중 변화량(%p)"}`,
+      `자산코드: ${asset?.asset_code}`
+    ]);
+
+    const dataStartRow = 25;
+    
+    // 차트 데이터 행 구축 (각 ETF별 시계열 데이터)
+    const chartRows = exposuresList.map((row) => {
+      const values: Record<string, number> = {};
+      const startWeight = row.history?.[dates[0]]?.weight ?? 0;
+      
+      dates.forEach((date) => {
+        const hist = row.history?.[date];
+        if (!hist) {
+          values[date] = 0;
+          return;
+        }
+        
+        if (assetChartMetric === "avg_weight" || assetChartMetric === "max_weight") {
+          values[date] = hist.weight;
+        } else if (assetChartMetric === "avg_weight_delta" || assetChartMetric === "max_weight_delta") {
+          values[date] = hist.weight - startWeight;
+        } else {
+          values[date] = hist.weight;
+        }
+      });
+      
+      return {
+        etf_name: row.etf_name,
+        values,
+      };
+    });
+
+    addRowsWithHeader(
+      chartSheet,
+      dataStartRow,
+      ["ETF 이름", ...dates],
+      chartRows.map((item) => [
+        item.etf_name,
+        ...dates.map((date) => item.values[date] ?? 0),
+      ])
+    );
+
+    // 2시트: "요약 표"
+    const summarySheet = workbook.addWorksheet("요약 표");
+    const summaryHeaders = [
+      "ETF 이름",
+      "최근 수량",
+      "수량 변화",
+      "최근 금액(원)",
+      "금액 변화(원)",
+      "최근 비중(%)",
+      "비중 변화(%p)"
+    ];
+    addRowsWithHeader(
+      summarySheet,
+      1,
+      summaryHeaders,
+      exposuresList.map((row) => [
+        row.etf_name,
+        row.end_quantity ?? null,
+        row.quantity_delta ?? null,
+        row.end_valuation_amount ?? null,
+        row.valuation_amount_delta ?? null,
+        row.end_weight ?? null,
+        row.weight_delta ?? null,
+      ])
+    );
+
+    // 3시트부터: 날짜순 개별 시트들
+    [...dates].reverse().forEach((date) => {
+      const dailySheet = workbook.addWorksheet(sanitizeSheetName(date));
+      addRowsWithHeader(
+        dailySheet,
+        1,
+        ["ETF 이름", "수량", "평가금액", "비중"],
+        exposuresList.map((row) => [
+          row.etf_name,
+          row.history?.[date]?.quantity ?? null,
+          row.history?.[date]?.valuation_amount ?? null,
+          row.history?.[date]?.weight ?? null,
+        ])
+      );
+    });
+
+    workbook.eachSheet((sheet) => {
+      sheet.columns.forEach((column) => {
+        column.width = 16;
+      });
+      sheet.getColumn(1).width = 30;
+    });
+
+    let workbookBuffer = await workbook.xlsx.writeBuffer();
+    
+    // 네이티브 차트 추가!
+    try {
+      workbookBuffer = await addNativeChartToWorkbook(workbookBuffer, {
+        chartTitle: `${asset?.asset_name || "종목"} 편입 비중 추이 (${assetChartMetric === "avg_weight" ? "편입 비중" : "비중 변화량"})`,
+        dates,
+        metric: (assetChartMetric === "avg_weight" ? "weight" : "weight_delta") as unknown as DetailChartMetric,
+        seriesCount: exposuresList.length,
+        seriesNames: exposuresList.map((row) => row.etf_name),
+        dataStartRow,
+      });
+    } catch (err) {
+      console.error("자산 네이티브 차트 생성 에러:", err);
+    }
+
+    const blob = new Blob([workbookBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${sanitizeFileName(asset?.asset_name || "종목")}_상세_분석_${periodLabel}.xlsx`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function downloadAssetWorkbook() {
+    if (analysisMode !== "asset" || !selectedAsset || !assetExposures.data?.rows.length) return;
+    await exportAssetWorkbook({
+      asset: selectedAsset,
+      dates: assetExposures.data.dates,
+      exposuresList: assetExposures.data.rows,
+    });
+  }
+
+  async function handleCrossListDownloadButton() {
+    if (analysisMode !== "cross") return;
+    if (!crossDownloadMode) {
+      setCrossDownloadMode(true);
+      return;
+    }
+    if (!selectedDownloadAssets.length || isDownloadingCrossList) return;
+
+    const selectedRows = crossDisplayRows.filter((item) => selectedCrossDownloadSet.has(item.asset_code));
+    setIsDownloadingCrossList(true);
+    try {
+      for (const item of selectedRows) {
+        const data = await api<AssetExposuresResponse>(
+          `/api/analysis/asset-exposures?asset_code=${encodeURIComponent(item.asset_code)}&${analysisPeriodQuery}`
+        );
+        if (!data.rows.length || !data.dates.length) continue;
+        await exportAssetWorkbook({
+          asset: item,
+          dates: data.dates,
+          exposuresList: data.rows,
+        });
+        await delay(150);
+      }
+    } finally {
+      setIsDownloadingCrossList(false);
+      setCrossDownloadMode(false);
+      setSelectedDownloadAssets([]);
+    }
+  }
+
+  function toggleCrossDownloadAsset(assetCode: string) {
+    setSelectedDownloadAssets((current) =>
+      current.includes(assetCode) ? current.filter((item) => item !== assetCode) : [...current, assetCode],
+    );
+  }
+
+  function toggleAllCrossDownloadAssets(checked: boolean) {
+    setSelectedDownloadAssets(checked ? crossDisplayRows.map((item) => item.asset_code) : []);
+  }
+
   async function handleListDownloadButton() {
     if (analysisMode !== "list") return;
     if (!listDownloadMode) {
@@ -838,10 +1175,44 @@ function App() {
               </button>
             </>
           )}
-          {(analysisMode === "cross" || analysisMode === "asset") && (
+          {analysisMode === "cross" && (
             <>
               <span className="toolbar-divider" aria-hidden="true" />
-              <button disabled title="종목별 다운로드는 추후 제공 예정입니다">
+              <button
+                disabled={isCurrentTableLoading || !crossDisplayRows.length || isDownloadingCrossList || (crossDownloadMode && !selectedDownloadAssets.length)}
+                title={crossDownloadMode ? "선택한 종목의 상세 분석 데이터를 각각 엑셀로 다운로드" : "다운로드할 종목을 선택합니다"}
+                onClick={handleCrossListDownloadButton}
+              >
+                <Download size={16} />
+                <span>
+                  {isDownloadingCrossList
+                    ? "다운로드 중"
+                    : crossDownloadMode
+                      ? `선택 다운로드 (${selectedDownloadAssets.length})`
+                      : "다운로드"}
+                </span>
+              </button>
+              {crossDownloadMode && (
+                <button
+                  title="종목 다운로드 선택을 취소합니다"
+                  onClick={() => {
+                    setCrossDownloadMode(false);
+                    setSelectedDownloadAssets([]);
+                  }}
+                >
+                  취소
+                </button>
+              )}
+            </>
+          )}
+          {analysisMode === "asset" && (
+            <>
+              <span className="toolbar-divider" aria-hidden="true" />
+              <button
+                disabled={isCurrentTableLoading || !assetExposures.data?.rows.length}
+                title="현재 자산 상세 데이터를 엑셀로 다운로드"
+                onClick={downloadAssetWorkbook}
+              >
                 <Download size={16} />
                 <span>다운로드</span>
               </button>
@@ -1016,9 +1387,23 @@ function App() {
                 )
               ) : analysisMode === "cross" ? (
                 crossDisplayRows.length ? (
-                  <table className="pivot-grid cross-grid">
+                  <table className={`pivot-grid cross-grid${crossDownloadMode ? " with-selection" : ""}`}>
                     <thead>
                       <tr>
+                        {crossDownloadMode && (
+                          <th className="select-cell">
+                            <input
+                              type="checkbox"
+                              checked={allCrossRowsSelected}
+                              ref={(el) => {
+                                if (el) {
+                                  el.indeterminate = partiallyCrossRowsSelected;
+                                }
+                              }}
+                              onChange={(event) => toggleAllCrossDownloadAssets(event.target.checked)}
+                            />
+                          </th>
+                        )}
                         <th>종목명</th>
                         <th className="score-cell">변동점수</th>
                         <th>ETF수</th>
@@ -1034,6 +1419,15 @@ function App() {
 
                         return (
                           <tr key={`${item.asset_code}-${item.asset_name}`}>
+                            {crossDownloadMode && (
+                              <td className="select-cell">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedCrossDownloadSet.has(item.asset_code)}
+                                  onChange={() => toggleCrossDownloadAsset(item.asset_code)}
+                                />
+                              </td>
+                            )}
                             <td>
                               <button className="text-link" onClick={() => navigateAsset(item.asset_code)}>
                                 {item.asset_name}
@@ -1052,58 +1446,52 @@ function App() {
                 ) : (
                   <EmptyState title="종목 합산 분석 데이터가 없습니다" body="대표 ETF 수집 후 여러 ETF에 걸친 종목별 합산 비중 변화를 볼 수 있습니다." />
                 )
-              ) : selectedAsset ? (
-                <table className="pivot-grid cross-grid">
-                  <thead>
-                    <tr>
-                      <th>기준</th>
-                      <th>최근 총 수량</th>
-                      <th>수량 변화</th>
-                      <th>수량 변화율</th>
-                      <th>최근 총 금액</th>
-                      <th>금액 변화</th>
-                      <th>금액 변화율</th>
-                      <th>합산 비중</th>
-                      <th>합산 비중 변화</th>
-                      <th>평균 비중</th>
-                      <th>평균 비중 변화</th>
-                      <th>최대 비중</th>
-                      <th>최대 비중 변화</th>
-                      <th>편입 ETF</th>
-                      <th>최근 노출</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(() => {
-                      const quantityDeltaPct = getDeltaPct(selectedAsset.start_quantity, selectedAsset.end_quantity);
-                      const amountDeltaPct = getDeltaPct(selectedAsset.start_valuation_amount, selectedAsset.end_valuation_amount);
-                      const avgWeight = getCrossAvgWeight(selectedAsset);
-                      const avgWeightDelta = getCrossAvgWeightDelta(selectedAsset);
-                      const maxWeight = getCrossMaxWeight(selectedAsset);
-                      const maxWeightDelta = getCrossMaxWeightDelta(selectedAsset);
+              ) : selectedAssetCode ? (
+                assetExposures.isLoading ? (
+                  <LoadingState title="데이터를 불러오는 중입니다" body="종목별 ETF 편입 상세 데이터를 불러오고 있습니다." />
+                ) : assetExposures.data?.rows.length ? (
+                  <table className="pivot-grid">
+                    <thead>
+                      <tr>
+                        <th>ETF 이름</th>
+                        <th>최근 수량</th>
+                        <th>수량 변화</th>
+                        <th>수량 변화율</th>
+                        <th>최근 금액</th>
+                        <th>금액 변화</th>
+                        <th>금액 변화율</th>
+                        <th>최근 비중</th>
+                        <th>비중 변화</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {assetExposures.data.rows.map((row) => {
+                        const quantityDeltaPct = getDeltaPct(row.start_quantity, row.end_quantity);
+                        const amountDeltaPct = getDeltaPct(row.start_valuation_amount, row.end_valuation_amount);
 
-                      return (
-                        <tr>
-                          <td>{selectedAsset.asset_name}</td>
-                          <td>{formatCompactNumber(selectedAsset.end_quantity)}</td>
-                          <td className={getDeltaClass(selectedAsset.quantity_delta)}>{formatSignedCompactNumber(selectedAsset.quantity_delta)}</td>
-                          <td className={getDeltaClass(quantityDeltaPct)}>{formatSignedPercent(quantityDeltaPct)}</td>
-                          <td>{formatKrw(selectedAsset.end_valuation_amount)}</td>
-                          <td className={getDeltaClass(selectedAsset.valuation_amount_delta)}>{formatSignedKrw(selectedAsset.valuation_amount_delta)}</td>
-                          <td className={getDeltaClass(amountDeltaPct)}>{formatSignedPercent(amountDeltaPct)}</td>
-                          <td>{formatPercent(selectedAsset.end_weight)}</td>
-                          <td className={getDeltaClass(selectedAsset.weight_delta)}>{formatSignedPercentPoint(selectedAsset.weight_delta)}</td>
-                          <td>{formatPercent(avgWeight)}</td>
-                          <td className={getDeltaClass(avgWeightDelta)}>{formatSignedPercentPoint(avgWeightDelta)}</td>
-                          <td>{formatPercent(maxWeight)}</td>
-                          <td className={getDeltaClass(maxWeightDelta)}>{formatSignedPercentPoint(maxWeightDelta)}</td>
-                          <td>{selectedAsset.latest_etf_count}</td>
-                          <td><ExposureLinks exposures={selectedAsset.latest_exposures} etfFundByName={etfFundByName} onEtfClick={navigateEtf} /></td>
-                        </tr>
-                      );
-                    })()}
-                  </tbody>
-                </table>
+                        return (
+                          <tr key={row.ksd_fund}>
+                            <td>
+                              <button className="text-link" onClick={() => navigateEtf(row.ksd_fund)}>
+                                {row.etf_name}
+                              </button>
+                            </td>
+                            <td>{formatCompactNumber(row.end_quantity)}</td>
+                            <td className={getDeltaClass(row.quantity_delta)}>{formatSignedCompactNumber(row.quantity_delta)}</td>
+                            <td className={getDeltaClass(quantityDeltaPct)}>{formatSignedPercent(quantityDeltaPct)}</td>
+                            <td>{formatKrw(row.end_valuation_amount)}</td>
+                            <td className={getDeltaClass(row.valuation_amount_delta)}>{formatSignedKrw(row.valuation_amount_delta)}</td>
+                            <td className={getDeltaClass(amountDeltaPct)}>{formatSignedPercent(amountDeltaPct)}</td>
+                            <td>{formatPercent(row.end_weight)}</td>
+                            <td className={getDeltaClass(row.weight_delta)}>{formatSignedPercentPoint(row.weight_delta)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <EmptyState title="편입된 ETF 데이터가 없습니다" body="해당 기간 동안 이 종목을 편입하고 있는 ETF 정보가 없습니다." />
+                )
               ) : (
                 <EmptyState title="선택한 종목 데이터를 찾을 수 없습니다" body="종목별 화면에서 종목명을 다시 선택하거나 분석 기간을 조정하세요." />
               )}
@@ -1156,12 +1544,19 @@ function App() {
                     <option value="valuation_delta">금액 변화량</option>
                     <option value="valuation_delta_ratio">금액 변화율</option>
                   </optgroup>
-                  <optgroup label="ETF 내 비중 기준">
-                    <option value="avg_weight">평균 비중</option>
-                    <option value="avg_weight_delta">평균 비중 변화량</option>
-                    <option value="max_weight">최대 비중</option>
-                    <option value="max_weight_delta">최대 비중 변화량</option>
-                  </optgroup>
+                  {analysisMode === "asset" ? (
+                    <optgroup label="비중 기준">
+                      <option value="avg_weight">편입 비중</option>
+                      <option value="avg_weight_delta">비중 변화량</option>
+                    </optgroup>
+                  ) : (
+                    <optgroup label="ETF 내 비중 기준">
+                      <option value="avg_weight">평균 비중</option>
+                      <option value="avg_weight_delta">평균 비중 변화량</option>
+                      <option value="max_weight">최대 비중</option>
+                      <option value="max_weight_delta">최대 비중 변화량</option>
+                    </optgroup>
+                  )}
                 </select>
               )}
             </div>
@@ -1262,9 +1657,8 @@ function formatCompactNumber(value: number | null | undefined) {
 }
 
 function formatSignedCompactNumber(value: number | null | undefined) {
-  if (value === null || value === undefined) return "-";
+  if (value === null || value === undefined || value === 0) return "-";
   const formatted = formatCompactNumber(Math.abs(value));
-  if (value === 0) return formatted;
   return `${value > 0 ? "+" : "-"}${formatted}`;
 }
 
@@ -1274,8 +1668,7 @@ function formatPercent(value: number | null | undefined) {
 }
 
 function formatSignedPercent(value: number | null | undefined) {
-  if (value === null || value === undefined) return "-";
-  if (value === 0) return "0.00%";
+  if (value === null || value === undefined || value === 0) return "-";
   return `${value > 0 ? "+" : "-"}${Math.abs(value).toFixed(2)}%`;
 }
 
@@ -1285,8 +1678,7 @@ function formatSignedPercentOrDash(value: number | null | undefined) {
 }
 
 function formatSignedPercentPoint(value: number | null | undefined) {
-  if (value === null || value === undefined) return "-";
-  if (value === 0) return "0.00%p";
+  if (value === null || value === undefined || value === 0) return "-";
   return `${value > 0 ? "+" : "-"}${Math.abs(value).toFixed(2)}%p`;
 }
 
@@ -1311,9 +1703,8 @@ function formatKrw(value: number | null | undefined) {
 }
 
 function formatSignedKrw(value: number | null | undefined) {
-  if (value === null || value === undefined) return "-";
+  if (value === null || value === undefined || value === 0) return "-";
   const formatted = formatKrw(Math.abs(value));
-  if (value === 0) return formatted;
   return `${value > 0 ? "+" : "-"}${formatted}`;
 }
 

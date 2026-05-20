@@ -701,3 +701,81 @@ def _assign_extreme(
             "start_value": start_value,
             "end_value": end_value,
         }
+
+
+def asset_exposures(
+    conn: sqlite3.Connection,
+    asset_code: str,
+    days: int = 3,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
+    dates = _complete_snapshot_dates(conn, start_date=start_date, end_date=end_date, days=days)
+    if not dates:
+        return {"dates": [], "rows": []}
+
+    placeholders = ",".join("?" for _ in dates)
+    raw_holdings = conn.execute(
+        f"""
+        SELECT
+            e.ksd_fund,
+            e.name AS etf_name,
+            s.base_date,
+            COALESCE(h.quantity, 0) AS quantity,
+            COALESCE(h.valuation_amount, 0) AS valuation_amount,
+            COALESCE(h.weight, 0) AS weight
+        FROM etf_daily_holding h
+        JOIN etf_daily_snapshot s ON s.snapshot_id = h.snapshot_id
+        JOIN etf e ON e.etf_id = s.etf_id
+        WHERE h.asset_code = ?
+          AND s.base_date IN ({placeholders})
+        ORDER BY s.base_date ASC
+        """,
+        (asset_code, *dates),
+    ).fetchall()
+
+    etf_data = {}
+    for row in raw_holdings:
+        ksd = row["ksd_fund"]
+        if ksd not in etf_data:
+            etf_data[ksd] = {
+                "ksd_fund": ksd,
+                "etf_name": row["etf_name"],
+                "history": {}
+            }
+        etf_data[ksd]["history"][row["base_date"]] = {
+            "quantity": row["quantity"],
+            "valuation_amount": row["valuation_amount"],
+            "weight": row["weight"],
+        }
+
+    start_date_val = dates[0]
+    end_date_val = dates[-1]
+
+    exposures = []
+    for ksd, data in etf_data.items():
+        history = data["history"]
+        
+        start_hist = history.get(start_date_val, {"quantity": 0, "valuation_amount": 0, "weight": 0.0})
+        end_hist = history.get(end_date_val, {"quantity": 0, "valuation_amount": 0, "weight": 0.0})
+
+        item = {
+            "ksd_fund": ksd,
+            "etf_name": data["etf_name"],
+            "start_quantity": start_hist["quantity"],
+            "end_quantity": end_hist["quantity"],
+            "quantity_delta": end_hist["quantity"] - start_hist["quantity"],
+            "start_valuation_amount": start_hist["valuation_amount"],
+            "end_valuation_amount": end_hist["valuation_amount"],
+            "valuation_amount_delta": end_hist["valuation_amount"] - start_hist["valuation_amount"],
+            "start_weight": start_hist["weight"],
+            "end_weight": end_hist["weight"],
+            "weight_delta": end_hist["weight"] - start_hist["weight"],
+            "history": history,
+        }
+        exposures.append(item)
+
+    exposures.sort(key=lambda x: x["end_weight"], reverse=True)
+
+    return {"dates": dates, "rows": exposures}
+

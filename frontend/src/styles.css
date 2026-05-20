@@ -828,3 +828,33 @@ th {
     grid-template-rows: minmax(260px, 1fr) minmax(340px, 1fr);
   }
 }
+
+/* 선택 셀 간격 고정 및 팽창 방지 (선택 모드가 켜져 1번째 자식이 되었을 때의 팽창 무효화) */
+.pivot-grid.with-selection th:first-child,
+.pivot-grid.with-selection td:first-child {
+  min-width: 0 !important;
+  max-width: none !important;
+  width: 44px !important;
+  padding: 0 4px !important;
+  text-align: center !important;
+  vertical-align: middle;
+}
+
+.pivot-grid th.select-cell input[type="checkbox"],
+.pivot-grid td.select-cell input[type="checkbox"] {
+  display: block;
+  width: 13px;
+  height: 13px;
+  margin: 0 auto;
+}
+
+/* 선택 모드가 활성화되어 2번째 열로 밀려난 종목명/ETF명의 왼쪽 정렬 및 너비 규격 보정 */
+.pivot-grid.with-selection th:nth-child(2),
+.pivot-grid.with-selection td:nth-child(2) {
+  min-width: 240px !important;
+  max-width: 320px !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left !important; /* 오른쪽 정렬 쏠림 버그 치료 */
+}

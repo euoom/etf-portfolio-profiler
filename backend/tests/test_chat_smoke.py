@@ -47,6 +47,13 @@ def test_system_prompt_requires_korean_without_mixed_language() -> None:
     assert "最大" in routes.SYSTEM_PROMPT
 
 
+def test_system_prompt_explains_product_purpose() -> None:
+    assert "ETF 운용사들이 최근 구성종목, 수량, 평가액, 비중을 어떻게 조정" in routes.SYSTEM_PROMPT
+    assert "운용사의 포트폴리오 변화와 시장 내 자금 배분 흐름" in routes.SYSTEM_PROMPT
+    assert "대응 스탠스를 정리" in routes.SYSTEM_PROMPT
+    assert "투자 결정을 대신하지 않고" in routes.SYSTEM_PROMPT
+
+
 def test_system_prompt_guides_cash_like_holdings() -> None:
     assert "현금성 항목" in routes.SYSTEM_PROMPT
     assert "수량, 최근 금액, 수량/금액 변화율보다 금액 변화, 비중 변화" in routes.SYSTEM_PROMPT

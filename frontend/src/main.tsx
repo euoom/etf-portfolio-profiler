@@ -1460,6 +1460,9 @@ function App() {
   }, []);
 
   function handleAiPanelClose() {
+    if (isAiClosing) {
+      return;
+    }
     if (window.innerWidth <= 980) {
       setIsAiClosing(true);
       setTimeout(() => {
@@ -1522,7 +1525,7 @@ function App() {
           {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
         <div className={`toolbar toolbar-primary${mobileMenuOpen ? " mobile-open" : ""}`}>
-          <div className="toolbar-group">
+          <div className={`toolbar-group period-toolbar-group${periodMode === "custom" ? " has-custom-range" : ""}`}>
             <span className="toolbar-label">기간:</span>
             <select value={periodMode} onChange={(event) => setPeriodMode(event.target.value as PeriodMode)}>
               <option value="5">최근 5영업일</option>
@@ -1531,10 +1534,10 @@ function App() {
               <option value="custom">직접 선택</option>
             </select>
             {periodMode === "custom" && (
-              <>
+              <div className="date-range-inputs">
                 <input type="date" value={customStartDate} onChange={(event) => setCustomStartDate(event.target.value)} />
                 <input type="date" value={customEndDate} onChange={(event) => setCustomEndDate(event.target.value)} />
-              </>
+              </div>
             )}
           </div>
           <span className="toolbar-divider" aria-hidden="true" />
@@ -2017,15 +2020,21 @@ function App() {
 
         {(aiPanelOpen || isAiClosing) ? (
           <>
+            <button
+              type="button"
+              className={"ai-panel-backdrop" + (isAiClosing ? " is-closing" : "")}
+              aria-label="AI 패널 닫기"
+              onClick={handleAiPanelClose}
+            />
             <div
               className="ai-panel-resizer"
               role="separator"
               aria-label="AI 패널 너비 조절"
               aria-orientation="vertical"
-            title="드래그해서 AI 패널 너비 조절"
-            onPointerDown={startAiPanelResize}
-            onDoubleClick={() => setAiPanelWidth(420)}
-          />
+              title="드래그해서 AI 패널 너비 조절"
+              onPointerDown={startAiPanelResize}
+              onDoubleClick={() => setAiPanelWidth(420)}
+            />
             <aside className={"ai-panel" + (isAiClosing ? " is-closing" : "")}>
               <ChatPanel
                 ref={chatPanelRef}

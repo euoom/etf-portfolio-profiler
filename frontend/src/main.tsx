@@ -2257,7 +2257,7 @@ const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel
       { id: newChatId(), role: "user", content: trimmed },
       { id: assistantId, role: "assistant", content: "데이터를 확인하는 중입니다...", actions: [] },
     ]);
-    setChatInput("");
+    clearChatInput();
     setIsChatStreaming(true);
     try {
       await streamChat(
@@ -2315,11 +2315,8 @@ const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel
     chatAbortRef.current?.abort();
     chatAbortRef.current = null;
     setChatMessages([]);
-    setChatInput("");
+    clearChatInput();
     setIsChatStreaming(false);
-    if (chatInputRef.current) {
-      chatInputRef.current.style.height = "auto";
-    }
     chatInputRef.current?.focus();
   }
 
@@ -2336,6 +2333,13 @@ const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel
     if (!input) return;
     input.style.height = "auto";
     input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
+  }
+
+  function clearChatInput() {
+    setChatInput("");
+    if (chatInputRef.current) {
+      chatInputRef.current.style.height = "auto";
+    }
   }
 
   function downloadChat() {

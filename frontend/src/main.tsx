@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tansta
 import ReactECharts from "echarts-for-react";
 import type { CellValue, Worksheet } from "exceljs";
 import JSZip from "jszip";
-import { Bot, Command, Download, Moon, PanelRightClose, PanelRightOpen, RotateCcw, Search, Send, Square, Sun } from "lucide-react";
+import { Bot, Command, Download, Menu, Moon, PanelRightClose, PanelRightOpen, RotateCcw, Search, Send, Square, Sun, X } from "lucide-react";
 import "./styles.css";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
@@ -303,10 +303,17 @@ function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileActiveTab, setMobileActiveTab] = useState<"table" | "chart">("table");
+  const [isAiClosing, setIsAiClosing] = useState(false);
 
   useEffect(() => {
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [selectedFund, selectedAssetCode]);
 
   useEffect(() => {
     function stopResize() {
@@ -1452,6 +1459,18 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  function handleAiPanelClose() {
+    if (window.innerWidth <= 980) {
+      setIsAiClosing(true);
+      setTimeout(() => {
+        setAiPanelOpen(false);
+        setIsAiClosing(false);
+      }, 280);
+    } else {
+      setAiPanelOpen(false);
+    }
+  }
+
   function navigateCurrentRoot() {
     if (analysisMode === "cross" || analysisMode === "asset") {
       setCrossChartMetric("change_score");
@@ -1494,7 +1513,15 @@ function App() {
           <span className="brand-separator">|</span>
           <span className="current-view">{currentViewTitle(analysisMode, selectedEtfName, selectedAsset?.asset_name || selectedAssetName)}</span>
         </div>
-        <div className="toolbar toolbar-primary">
+        <button
+          className="mobile-hamburger"
+          onClick={() => setMobileMenuOpen((prev) => !prev)}
+          aria-label="메뉴 토글"
+          title="메뉴 토글"
+        >
+          {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
+        <div className={`toolbar toolbar-primary${mobileMenuOpen ? " mobile-open" : ""}`}>
           <div className="toolbar-group">
             <span className="toolbar-label">기간:</span>
             <select value={periodMode} onChange={(event) => setPeriodMode(event.target.value as PeriodMode)}>
@@ -1521,7 +1548,7 @@ function App() {
             </button>
           </div>
         </div>
-        <div className="toolbar toolbar-secondary">
+        <div className={`toolbar toolbar-secondary${mobileMenuOpen ? " mobile-open" : ""}`}>
           {analysisMode === "list" && (
             <>
               <div className="toolbar-group">
@@ -1553,48 +1580,43 @@ function App() {
               </div>
             </>
           )}
-          {analysisMode === "single" && (
-            <>
-              <span className="toolbar-divider" aria-hidden="true" />
+          <div className="toolbar-actions">
+            {analysisMode === "single" && (
               <button disabled={isCurrentTableLoading || !pivotRows.length} title="현재 ETF 상세 데이터를 엑셀로 다운로드" onClick={downloadDetailWorkbook}>
                 <Download size={16} />
                 <span>다운로드</span>
               </button>
-            </>
-          )}
-          {analysisMode === "cross" && (
-            <>
-              <span className="toolbar-divider" aria-hidden="true" />
-              <button
-                disabled={isCurrentTableLoading || !crossDisplayRows.length || isDownloadingCrossList || (crossDownloadMode && !selectedDownloadAssets.length)}
-                title={crossDownloadMode ? "선택한 종목의 상세 분석 데이터를 각각 엑셀로 다운로드" : "다운로드할 종목을 선택합니다"}
-                onClick={handleCrossListDownloadButton}
-              >
-                <Download size={16} />
-                <span>
-                  {isDownloadingCrossList
-                    ? "다운로드 중"
-                    : crossDownloadMode
-                      ? `선택 다운로드 (${selectedDownloadAssets.length})`
-                      : "다운로드"}
-                </span>
-              </button>
-              {crossDownloadMode && (
+            )}
+            {analysisMode === "cross" && (
+              <>
                 <button
-                  title="종목 다운로드 선택을 취소합니다"
-                  onClick={() => {
-                    setCrossDownloadMode(false);
-                    setSelectedDownloadAssets([]);
-                  }}
+                  disabled={isCurrentTableLoading || !crossDisplayRows.length || isDownloadingCrossList || (crossDownloadMode && !selectedDownloadAssets.length)}
+                  title={crossDownloadMode ? "선택한 종목의 상세 분석 데이터를 각각 엑셀로 다운로드" : "다운로드할 종목을 선택합니다"}
+                  onClick={handleCrossListDownloadButton}
                 >
-                  취소
+                  <Download size={16} />
+                  <span>
+                    {isDownloadingCrossList
+                      ? "다운로드 중"
+                      : crossDownloadMode
+                        ? `선택 (${selectedDownloadAssets.length})`
+                        : "다운로드"}
+                  </span>
                 </button>
-              )}
-            </>
-          )}
-          {analysisMode === "asset" && (
-            <>
-              <span className="toolbar-divider" aria-hidden="true" />
+                {crossDownloadMode && (
+                  <button
+                    title="종목 다운로드 선택을 취소합니다"
+                    onClick={() => {
+                      setCrossDownloadMode(false);
+                      setSelectedDownloadAssets([]);
+                    }}
+                  >
+                    취소
+                  </button>
+                )}
+              </>
+            )}
+            {analysisMode === "asset" && (
               <button
                 disabled={isCurrentTableLoading || !assetExposures.data?.rows.length}
                 title="현재 자산 상세 데이터를 엑셀로 다운로드"
@@ -1603,67 +1625,66 @@ function App() {
                 <Download size={16} />
                 <span>다운로드</span>
               </button>
-            </>
-          )}
-          {analysisMode === "list" && (
-            <>
-              <span className="toolbar-divider" aria-hidden="true" />
-              <button
-                disabled={isCurrentTableLoading || !summaryRows.length || isDownloadingList || (listDownloadMode && !selectedDownloadFunds.length)}
-                title={listDownloadMode ? "선택한 ETF 상세 데이터를 각각 엑셀로 다운로드" : "다운로드할 ETF를 선택합니다"}
-                onClick={handleListDownloadButton}
-              >
-                <Download size={16} />
-                <span>
-                  {isDownloadingList
-                    ? "다운로드 중"
-                    : listDownloadMode
-                      ? `선택 다운로드 (${selectedDownloadFunds.length})`
-                      : "다운로드"}
-                </span>
-              </button>
-              {listDownloadMode && (
+            )}
+            {analysisMode === "list" && (
+              <>
                 <button
-                  title="ETF 다운로드 선택을 취소합니다"
-                  onClick={() => {
-                    setListDownloadMode(false);
-                    setSelectedDownloadFunds([]);
-                  }}
+                  disabled={isCurrentTableLoading || !summaryRows.length || isDownloadingList || (listDownloadMode && !selectedDownloadFunds.length)}
+                  title={listDownloadMode ? "선택한 ETF 상세 데이터를 각각 엑셀로 다운로드" : "다운로드할 ETF를 선택합니다"}
+                  onClick={handleListDownloadButton}
                 >
-                  취소
+                  <Download size={16} />
+                  <span>
+                    {isDownloadingList
+                      ? "다운로드 중"
+                      : listDownloadMode
+                        ? `선택 (${selectedDownloadFunds.length})`
+                        : "다운로드"}
+                  </span>
                 </button>
-              )}
-            </>
-          )}
-          {!aiPanelOpen && (
-            <>
-              <span className="toolbar-divider" aria-hidden="true" />
+                {listDownloadMode && (
+                  <button
+                    title="ETF 다운로드 선택을 취소합니다"
+                    onClick={() => {
+                      setListDownloadMode(false);
+                      setSelectedDownloadFunds([]);
+                    }}
+                  >
+                    취소
+                  </button>
+                )}
+              </>
+            )}
+            {!aiPanelOpen && (
               <button className="ai-topbar-toggle" onClick={() => setAiPanelOpen(true)}>
                 <PanelRightOpen size={16} />
                 <span>AI 패널</span>
               </button>
-            </>
-          )}
-          <span className="toolbar-divider" aria-hidden="true" />
-          <button
-            className="icon-button"
-            aria-label="명령 팔레트 열기"
-            title="명령 팔레트 (Ctrl+Shift+P)"
-            onClick={() => {
-              setCommandPaletteOpen(true);
-              setSelectedCommandIndex(0);
-            }}
-          >
-            <Command size={16} />
-          </button>
-          <button
-            className="icon-button"
-            aria-label={theme === "dark" ? "라이트 테마로 전환" : "다크 테마로 전환"}
-            title={theme === "dark" ? "라이트 테마" : "다크 테마"}
-            onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-          >
-            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
+            )}
+            <span className="toolbar-divider" aria-hidden="true" />
+            <button
+              className="icon-button"
+              aria-label="명령 팔레트 열기"
+              title="명령 팔레트 (Ctrl+Shift+P)"
+              onClick={() => {
+                setCommandPaletteOpen(true);
+                setSelectedCommandIndex(0);
+              }}
+            >
+              <Command size={16} />
+              <span className="button-text">명령어</span>
+            </button>
+            <span className="toolbar-divider" aria-hidden="true" />
+            <button
+              className="icon-button"
+              aria-label={theme === "dark" ? "라이트 테마로 전환" : "다크 테마로 전환"}
+              title={theme === "dark" ? "라이트 테마" : "다크 테마"}
+              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+            >
+              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+              <span className="button-text">{theme === "dark" ? "라이트" : "다크"}</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1672,7 +1693,21 @@ function App() {
         style={aiPanelOpen ? ({ "--ai-panel-width": `${aiPanelWidth}px` } as React.CSSProperties) : undefined}
       >
         <section className="analysis-canvas">
-          <section className="pivot-panel canvas-section">
+          <div className="mobile-tab-selector">
+            <button
+              className={mobileActiveTab === "table" ? "active" : ""}
+              onClick={() => setMobileActiveTab("table")}
+            >
+              데이터 표
+            </button>
+            <button
+              className={mobileActiveTab === "chart" ? "active" : ""}
+              onClick={() => setMobileActiveTab("chart")}
+            >
+              분석 차트
+            </button>
+          </div>
+          <section className={`pivot-panel canvas-section${mobileActiveTab === "table" ? "" : " mobile-hidden"}`}>
             <div className="pivot-grid-wrap">
               {isCurrentTableLoading ? (
                 <LoadingState title="데이터를 불러오는 중입니다" body={getLoadingMessage(analysisMode)} />
@@ -1901,7 +1936,7 @@ function App() {
             </div>
           </section>
 
-          <section className="chart-panel canvas-section">
+          <section className={`chart-panel canvas-section${mobileActiveTab === "chart" ? "" : " mobile-hidden"}`}>
             <div className="section-heading">
               <h2>차트</h2>
               {analysisMode === "list" ? (
@@ -1980,7 +2015,7 @@ function App() {
           </section>
         </section>
 
-        {aiPanelOpen ? (
+        {(aiPanelOpen || isAiClosing) ? (
           <>
             <div
               className="ai-panel-resizer"
@@ -1991,7 +2026,7 @@ function App() {
             onPointerDown={startAiPanelResize}
             onDoubleClick={() => setAiPanelWidth(420)}
           />
-            <aside className="ai-panel">
+            <aside className={"ai-panel" + (isAiClosing ? " is-closing" : "")}>
               <ChatPanel
                 ref={chatPanelRef}
                 selectedFund={selectedFund}
@@ -2002,12 +2037,24 @@ function App() {
                 buildContext={buildChatContext}
                 onAction={runChatAction}
                 onBeforeSubmit={handleChatBeforeSubmit}
-                onClose={() => setAiPanelOpen(false)}
+                onClose={handleAiPanelClose}
               />
             </aside>
           </>
         ) : null}
       </main>
+
+      {!aiPanelOpen && (
+        <button
+          className="mobile-ai-fab"
+          onClick={() => setAiPanelOpen(true)}
+          aria-label="AI 분석 상담"
+          title="AI 분석 상담"
+        >
+          <Bot size={24} />
+        </button>
+      )}
+
       <CommandPalette
         open={commandPaletteOpen}
         query={commandQuery}

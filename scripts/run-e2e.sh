@@ -106,5 +106,5 @@ wait_for_url "Frontend" "$FRONTEND_URL" "$frontend_pid" || {
 echo "Running Playwright E2E tests..."
 (
   cd "$FRONTEND_DIR"
-  E2E_BACKEND_URL="$BACKEND_URL" PLAYWRIGHT_BASE_URL="$FRONTEND_URL" npm run e2e
+  E2E_BACKEND_URL="$BACKEND_URL" PLAYWRIGHT_BASE_URL="$FRONTEND_URL" npm run e2e:ci
 )

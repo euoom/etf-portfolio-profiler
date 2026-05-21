@@ -647,7 +647,8 @@ body.resizing-ai-panel {
 }
 
 .markdown-content p,
-.markdown-content ul {
+.markdown-content ul,
+.markdown-content blockquote {
   margin: 0;
 }
 
@@ -666,6 +667,14 @@ body.resizing-ai-panel {
   margin: 2px 0;
   border: 0;
   border-top: 1px solid var(--border);
+}
+
+.markdown-content blockquote {
+  padding: 7px 9px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-subtle);
+  color: var(--muted);
 }
 
 .markdown-table-wrap {

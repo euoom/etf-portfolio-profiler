@@ -1,3 +1,4 @@
+import httpx
 from fastapi.testclient import TestClient
 
 from app.api import routes
@@ -57,6 +58,7 @@ def test_system_prompt_explains_product_purpose() -> None:
 def test_system_prompt_guides_cash_like_holdings() -> None:
     assert "현금성 항목" in routes.SYSTEM_PROMPT
     assert "수량, 최근 금액, 수량/금액 변화율보다 금액 변화, 비중 변화" in routes.SYSTEM_PROMPT
+    assert "현금성 항목에는 수량 변화율을 표시하지 않는다" in routes.SYSTEM_PROMPT
 
 
 def test_system_prompt_hides_internal_tool_names() -> None:
@@ -68,6 +70,8 @@ def test_system_prompt_hides_internal_tool_names() -> None:
 def test_system_prompt_separates_weight_and_quantity_changes() -> None:
     assert "비중 변화와 수량 변화는 서로 다른 개념" in routes.SYSTEM_PROMPT
     assert "수량 변화 필드" in routes.SYSTEM_PROMPT
+    assert "서로 다른 칸의 종목명을 한 종목처럼 합치지" in routes.SYSTEM_PROMPT
+    assert "한미반도체 수량이 -32.20%" in routes.SYSTEM_PROMPT
 
 
 def test_system_prompt_requires_metric_unit_labels() -> None:
@@ -96,12 +100,88 @@ def test_system_prompt_prioritizes_visible_table_for_current_screen_questions() 
 
 def test_system_prompt_prevents_unfounded_causal_explanations() -> None:
     assert "ETF 환매, 자금 유입, 리밸런싱, 구조적 요인" in routes.SYSTEM_PROMPT
+    assert "시장 분위기, 순매수 우위, 자금 이탈" in routes.SYSTEM_PROMPT
     assert "원인은 확정할 수 없습니다" in routes.SYSTEM_PROMPT
 
 
 def test_system_prompt_uses_natural_korean_for_three_item_summaries() -> None:
     assert "눈에 띄는 변화 3가지" in routes.SYSTEM_PROMPT
     assert "상위 3개 변화" in routes.SYSTEM_PROMPT
+
+
+def test_system_prompt_blocks_loading_text_and_mixed_language_fragments() -> None:
+    assert "데이터를 확인하는 중입니다" in routes.SYSTEM_PROMPT
+    assert "로딩 문구" in routes.SYSTEM_PROMPT
+    assert "非常" in routes.SYSTEM_PROMPT
+    assert "合成" in routes.SYSTEM_PROMPT
+    assert "相反" in routes.SYSTEM_PROMPT
+    assert "inúmer" in routes.SYSTEM_PROMPT
+    assert "走了进来" in routes.SYSTEM_PROMPT
+    assert "紧缩" in routes.SYSTEM_PROMPT
+
+
+def test_fallback_forces_etf_list_question() -> None:
+    intent = routes._fallback_chat_intent(
+        routes.ChatRequest(message="최근 5영업일간 변동이 큰 ETF 5개만 요약해줘")
+    )
+
+    assert intent.intent == "etf_list"
+    assert intent.confidence == 0.95
+
+
+def test_sanitize_chat_output_replaces_mixed_language_fragments() -> None:
+    assert routes._sanitize_chat_output("合成 ETF와 相反 흐름, 非常 큰 변화, 変わった 구성, 走了进来, 紧缩") == (
+        "합성 ETF와 반대 흐름, 매우 큰 변화, 바뀐 구성, , 축소"
+    )
+
+
+def test_validate_keeps_current_view_for_this_screen_question() -> None:
+    request = routes.ChatRequest(message="이 화면에서 눈에 띄는 변화만 3개 알려줘")
+    parsed = {
+        "intent": "asset_list",
+        "confidence": 0.95,
+        "entity_name": "TIGER 미국우주테크",
+        "entity_code": "KR70183J0002",
+    }
+    fallback = routes._fallback_chat_intent(request)
+
+    intent = routes._validate_chat_intent(parsed, request, fallback)
+
+    assert intent.intent == "current_view"
+
+
+def test_simple_greeting_uses_server_response() -> None:
+    assert routes._simple_general_response("안녕") == (
+        "안녕하세요! ETF Portfolio Profiler입니다. ETF 운용 동향이나 화면 데이터 변화가 궁금하시면 편하게 질문해 주세요."
+    )
+
+
+def test_summarize_pivot_rows_hides_cash_quantity_fields() -> None:
+    rows = [
+        {
+            "asset_code": "KRD010010001",
+            "asset_name": "원화예금",
+            "weight_delta": -1.5,
+            "quantity_delta": -28_990_045,
+            "quantity_delta_ratio": -1308.49,
+            "valuation_amount_delta": -28_990_045,
+            "valuation_amount_delta_ratio": -12.3,
+        }
+    ]
+
+    [row] = routes._summarize_pivot_rows(rows)
+
+    assert row["quantity_delta"] is None
+    assert row["quantity_delta_ratio"] is None
+    assert "현금성 항목" in row["quantity_note"]
+
+
+def test_http_status_error_text_handles_unread_streaming_response() -> None:
+    request = httpx.Request("POST", "https://example.test")
+    response = httpx.Response(429, request=request, stream=httpx.ByteStream(b'{"status":429}'))
+    error = httpx.HTTPStatusError("too many requests", request=request, response=response)
+
+    assert routes._http_status_error_text(error) == '{"status":429}'
 
 
 def test_chat_prompt_includes_thread_history() -> None:
@@ -303,9 +383,8 @@ def test_chat_skips_intent_resolution_for_greeting(monkeypatch) -> None:
         response = client.post("/api/chat", json={"message": "안녕"})
 
     assert response.status_code == 200
-    assert response.json()["message"] == "안녕하세요. ETF 데이터를 함께 살펴볼게요."
-    assert len(calls) == 1
-    assert calls[0]["tool_choice"] == "none"
+    assert response.json()["message"] == routes._simple_general_response("안녕")
+    assert calls == []
 
 
 def test_asset_etf_exposure_question_is_forced_to_asset_detail_without_llm_intent() -> None:
@@ -599,5 +678,5 @@ def test_chat_stream_streams_final_answer_after_tool_call(monkeypatch) -> None:
         response = client.post("/api/chat/stream", json={"message": "ETF 상세 봐줘"})
 
     assert response.status_code == 200
-    assert response.text == "데이터를 확인하는 중입니다...\n\n최종 응답"
+    assert response.text == "최종 응답"
     assert calls == [("chat", "none"), ("chat", "auto"), ("stream", "none")]

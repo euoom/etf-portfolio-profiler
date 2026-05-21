@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "e2e": "playwright test"
+    "e2e": "playwright test tests/e2e/ci-mock.spec.ts",
+    "e2e:ci": "playwright test tests/e2e/ci-mock.spec.ts",
+    "e2e:local": "playwright test tests/e2e/local-real.spec.ts",
+    "e2e:local:cdp": "node tests/e2e/local-real-cdp.mjs",
+    "chat:quality:cdp": "node tests/e2e/chat-quality-cdp.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.64.2",

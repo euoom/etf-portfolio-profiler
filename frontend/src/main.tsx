@@ -3778,6 +3778,9 @@ function MarkdownText({ content }: { content: string }) {
         if (block.type === "divider") {
           return <hr className="markdown-divider" key={index} />;
         }
+        if (block.type === "blockquote") {
+          return <blockquote key={index}>{renderInlineMarkdown(block.text)}</blockquote>;
+        }
         if (block.type === "list") {
           return (
             <ul key={index}>
@@ -3820,6 +3823,7 @@ function MarkdownText({ content }: { content: string }) {
 type MarkdownBlock =
   | { type: "heading"; text: string }
   | { type: "divider" }
+  | { type: "blockquote"; text: string }
   | { type: "paragraph"; text: string }
   | { type: "list"; items: string[] }
   | { type: "table"; headers: string[]; rows: string[][] };
@@ -3850,6 +3854,15 @@ function parseMarkdownBlocks(content: string): MarkdownBlock[] {
     if (/^#{1,4}\s+/.test(line)) {
       blocks.push({ type: "heading", text: line.replace(/^#{1,4}\s+/, "") });
       index += 1;
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      const quoteLines: string[] = [];
+      while (index < lines.length && /^>\s?/.test(lines[index])) {
+        quoteLines.push(lines[index].replace(/^>\s?/, ""));
+        index += 1;
+      }
+      blocks.push({ type: "blockquote", text: quoteLines.join(" ") });
       continue;
     }
     if (/^[-*]\s+/.test(line)) {

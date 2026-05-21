@@ -370,8 +370,88 @@ button:disabled {
   overflow: hidden;
 }
 
+.workspace.with-ads {
+  grid-template-columns: 160px minmax(0, 1fr) 8px var(--ai-panel-width, 420px);
+  padding-left: 0;
+}
+
 .workspace.ai-collapsed {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace.with-ads.ai-collapsed {
+  grid-template-columns: 160px minmax(0, 1fr);
+}
+
+.ad-slot {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: var(--shadow);
+}
+
+.ad-slot .adsbygoogle {
+  display: block;
+}
+
+.desktop-left-rail {
+  display: none;
+}
+
+.workspace.with-ads .desktop-left-rail {
+  display: flex;
+  width: 160px;
+  min-height: 0;
+  align-self: stretch;
+  overflow: hidden;
+}
+
+.desktop-left-rail .adsbygoogle {
+  width: 160px;
+  min-width: 160px;
+  height: 600px;
+}
+
+.mobile-bottom {
+  display: none;
+}
+
+.mock-ad-slot {
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-style: dashed;
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      var(--surface-subtle),
+      var(--surface-subtle) 8px,
+      var(--surface) 8px,
+      var(--surface) 16px
+    );
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0;
+  text-align: center;
+}
+
+.mock-ad-slot span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.mock-ad-slot strong {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .ai-panel-resizer {
@@ -428,6 +508,62 @@ body.resizing-ai-panel {
   min-width: 0;
   overflow: hidden;
   border-radius: 10px;
+}
+
+.policy-page {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.policy-content {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 34px;
+}
+
+.policy-header {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.policy-header h1,
+.policy-content h2 {
+  margin: 0;
+  color: var(--text);
+  letter-spacing: 0;
+}
+
+.policy-header h1 {
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.policy-content section {
+  padding: 22px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.policy-content section:last-child {
+  border-bottom: 0;
+}
+
+.policy-content h2 {
+  margin-bottom: 10px;
+  font-size: 18px;
+}
+
+.policy-content p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
 }
 
 .status-pill {
@@ -1163,9 +1299,15 @@ th {
 
 @media (max-width: 980px) {
   .app-shell {
+    --mobile-ad-height: 0px;
     min-height: 100dvh;
     display: flex;
     flex-direction: column;
+    padding-bottom: calc(var(--mobile-ad-height) + var(--keyboard-inset, 0px));
+  }
+
+  .app-shell.ads-enabled {
+    --mobile-ad-height: 64px;
   }
 
   .mobile-hamburger {
@@ -1312,8 +1454,16 @@ th {
     gap: 8px;
   }
 
+  .workspace.with-ads {
+    grid-template-columns: 1fr !important;
+  }
+
   .workspace.ai-collapsed {
     grid-template-columns: 1fr !important;
+  }
+
+  .workspace.with-ads .desktop-left-rail {
+    display: none;
   }
 
   .mobile-tab-selector {
@@ -1352,6 +1502,18 @@ th {
     height: 100%;
     border-radius: 10px;
     overflow: hidden;
+  }
+
+  .policy-page {
+    border-radius: 10px;
+  }
+
+  .policy-content {
+    padding: 22px 18px 26px;
+  }
+
+  .policy-header h1 {
+    font-size: 24px;
   }
 
   .canvas-section {
@@ -1437,6 +1599,10 @@ th {
     box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
   }
 
+  .mobile-ai-fab.above-mobile-ad {
+    bottom: calc(var(--mobile-ad-height) + var(--keyboard-inset, 0px) + 16px);
+  }
+
   /* 모바일 햄버거 툴바 내 열기 버튼 원천 차단 */
   .toolbar-actions .ai-topbar-toggle {
     display: none !important;
@@ -1446,15 +1612,38 @@ th {
   .ai-panel {
     position: fixed !important;
     left: 0 !important;
-    bottom: 0 !important;
+    bottom: calc(var(--mobile-ad-height) + var(--keyboard-inset, 0px)) !important;
     width: 100% !important;
-    height: 75vh !important;
+    height: min(75vh, calc(100dvh - var(--mobile-ad-height) - var(--keyboard-inset, 0px) - 12px)) !important;
     z-index: 1001 !important;
     border-radius: 16px 16px 0 0 !important;
     box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.2) !important;
     background: var(--surface) !important;
     overflow: hidden !important;
     animation: slideUpFAB 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  }
+
+  .mobile-bottom {
+    position: fixed;
+    right: 0;
+    bottom: var(--keyboard-inset, 0px);
+    left: 0;
+    z-index: 1002;
+    display: flex;
+    width: 100%;
+    height: var(--mobile-ad-height);
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 0;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.14);
+  }
+
+  .mobile-bottom .adsbygoogle {
+    width: 100%;
+    min-width: 320px;
+    height: 50px;
+    margin: auto;
   }
 
   @keyframes slideUpFAB {

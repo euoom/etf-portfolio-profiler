@@ -4,11 +4,16 @@ import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tansta
 import ReactECharts from "echarts-for-react";
 import type { CellValue, Worksheet } from "exceljs";
 import JSZip from "jszip";
-import { Bot, Command, Download, Menu, Moon, PanelRightClose, PanelRightOpen, RotateCcw, Search, Send, Square, Sun, X } from "lucide-react";
+import { Bot, CircleHelp, Command, Download, Menu, Moon, PanelRightClose, PanelRightOpen, RotateCcw, Search, Send, Square, Sun, X } from "lucide-react";
 import "./styles.css";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 const showDevTools = import.meta.env.VITE_SHOW_DEV_TOOLS === "true";
+const adsenseEnabled = import.meta.env.VITE_ADSENSE_ENABLED === "true";
+const adsenseMockEnabled = import.meta.env.DEV || import.meta.env.VITE_ADSENSE_MOCK === "true";
+const adsenseClientId = import.meta.env.VITE_ADSENSE_CLIENT_ID || "";
+const adsenseDesktopSlotId = import.meta.env.VITE_ADSENSE_DESKTOP_SLOT_ID || "";
+const adsenseMobileSlotId = import.meta.env.VITE_ADSENSE_MOBILE_SLOT_ID || "";
 const queryClient = new QueryClient();
 
 type AnalysisMode = "list" | "single" | "cross" | "asset";
@@ -306,10 +311,47 @@ function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileActiveTab, setMobileActiveTab] = useState<"table" | "chart">("table");
   const [isAiClosing, setIsAiClosing] = useState(false);
+  const [policyOpen, setPolicyOpen] = useState(false);
+  const lastAnalysisHashRef = useRef("#/");
+  const shouldRenderAds = adsenseMockEnabled || (adsenseEnabled && Boolean(adsenseClientId));
 
   useEffect(() => {
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!adsenseEnabled || !adsenseClientId) return;
+    if (document.querySelector(`script[data-adsense-client="${adsenseClientId}"]`)) return;
+
+    const script = document.createElement("script");
+    script.async = true;
+    script.crossOrigin = "anonymous";
+    script.dataset.adsenseClient = adsenseClientId;
+    script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(adsenseClientId)}`;
+    document.head.appendChild(script);
+  }, []);
+
+  useEffect(() => {
+    const visualViewport = window.visualViewport;
+    if (!visualViewport) return;
+
+    const updateKeyboardInset = () => {
+      const keyboardInset = Math.max(0, window.innerHeight - visualViewport.height - visualViewport.offsetTop);
+      document.documentElement.style.setProperty("--keyboard-inset", `${Math.round(keyboardInset)}px`);
+    };
+
+    updateKeyboardInset();
+    visualViewport.addEventListener("resize", updateKeyboardInset);
+    visualViewport.addEventListener("scroll", updateKeyboardInset);
+    window.addEventListener("orientationchange", updateKeyboardInset);
+
+    return () => {
+      document.documentElement.style.removeProperty("--keyboard-inset");
+      visualViewport.removeEventListener("resize", updateKeyboardInset);
+      visualViewport.removeEventListener("scroll", updateKeyboardInset);
+      window.removeEventListener("orientationchange", updateKeyboardInset);
+    };
+  }, []);
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -326,6 +368,13 @@ function App() {
 
   useEffect(() => {
     function syncRoute() {
+      const currentHash = window.location.hash || "#/";
+      if (currentHash.replace(/^#/, "") === "/policy") {
+        setPolicyOpen(true);
+        return;
+      }
+      lastAnalysisHashRef.current = currentHash;
+      setPolicyOpen(false);
       const route = parseRoute();
       setAnalysisMode(route.mode);
       if (route.ksdFund) {
@@ -1507,14 +1556,14 @@ function App() {
   }
 
   return (
-    <div className="app-shell" data-theme={theme}>
+    <div className={`app-shell${shouldRenderAds ? " ads-enabled" : ""}`} data-theme={theme}>
       <header className="topbar">
         <div className="brand-area">
           <button className="brand-link" onClick={navigateCurrentRoot}>
             ETF Portfolio Profiler
           </button>
           <span className="brand-separator">|</span>
-          <span className="current-view">{currentViewTitle(analysisMode, selectedEtfName, selectedAsset?.asset_name || selectedAssetName)}</span>
+          <span className="current-view">{policyOpen ? "정책 및 고지" : currentViewTitle(analysisMode, selectedEtfName, selectedAsset?.asset_name || selectedAssetName)}</span>
         </div>
         <button
           className="mobile-hamburger"
@@ -1687,14 +1736,34 @@ function App() {
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
               <span className="button-text">{theme === "dark" ? "라이트" : "다크"}</span>
             </button>
+            <button
+              className={`icon-button${policyOpen ? " mode-active" : ""}`}
+              aria-label="정책 및 고지"
+              title={policyOpen ? "이전 화면으로 돌아가기" : "정책 및 고지"}
+              onClick={() => togglePolicyPage(lastAnalysisHashRef.current, policyOpen)}
+            >
+              <CircleHelp size={16} />
+              <span className="button-text">고지</span>
+            </button>
           </div>
         </div>
       </header>
 
       <main
-        className={aiPanelOpen ? "workspace" : "workspace ai-collapsed"}
+        className={`${aiPanelOpen && !policyOpen ? "workspace" : "workspace ai-collapsed"}${shouldRenderAds ? " with-ads" : ""}`}
         style={aiPanelOpen ? ({ "--ai-panel-width": `${aiPanelWidth}px` } as React.CSSProperties) : undefined}
       >
+        {shouldRenderAds ? (
+          <AdSlot
+            placement="desktop-left-rail"
+            clientId={adsenseClientId}
+            slotId={adsenseDesktopSlotId}
+            realAdsEnabled={adsenseEnabled}
+          />
+        ) : null}
+        {policyOpen ? (
+          <PolicyPage />
+        ) : (
         <section className="analysis-canvas">
           <div className="mobile-tab-selector">
             <button
@@ -2017,8 +2086,9 @@ function App() {
             )}
           </section>
         </section>
+        )}
 
-        {(aiPanelOpen || isAiClosing) ? (
+        {!policyOpen && (aiPanelOpen || isAiClosing) ? (
           <>
             <button
               type="button"
@@ -2053,9 +2123,18 @@ function App() {
         ) : null}
       </main>
 
-      {!aiPanelOpen && (
+      {shouldRenderAds ? (
+        <AdSlot
+          placement="mobile-bottom"
+          clientId={adsenseClientId}
+          slotId={adsenseMobileSlotId}
+          realAdsEnabled={adsenseEnabled}
+        />
+      ) : null}
+
+      {!policyOpen && !aiPanelOpen && (
         <button
-          className="mobile-ai-fab"
+          className={`mobile-ai-fab${shouldRenderAds ? " above-mobile-ad" : ""}`}
           onClick={() => setAiPanelOpen(true)}
           aria-label="AI 분석 상담"
           title="AI 분석 상담"
@@ -2075,6 +2154,116 @@ function App() {
         onRun={runCommandItem}
       />
     </div>
+  );
+}
+
+function AdSlot({
+  placement,
+  clientId,
+  slotId,
+  realAdsEnabled,
+}: {
+  placement: "desktop-left-rail" | "mobile-bottom";
+  clientId: string;
+  slotId: string;
+  realAdsEnabled: boolean;
+}) {
+  const adRef = useRef<HTMLModElement>(null);
+  const canRenderRealAd = realAdsEnabled && Boolean(clientId && slotId);
+
+  useEffect(() => {
+    if (!canRenderRealAd || !adRef.current) return;
+    try {
+      ((window as Window & { adsbygoogle?: unknown[] }).adsbygoogle = (window as Window & { adsbygoogle?: unknown[] }).adsbygoogle || []).push({});
+    } catch (error) {
+      console.warn("AdSense slot render failed", error);
+    }
+  }, [canRenderRealAd]);
+
+  if (canRenderRealAd) {
+    return (
+      <aside className={`ad-slot ${placement}`} aria-label="광고">
+        <ins
+          ref={adRef}
+          className="adsbygoogle"
+          data-ad-client={clientId}
+          data-ad-slot={slotId}
+          data-ad-format={placement === "mobile-bottom" ? "horizontal" : "vertical"}
+          data-full-width-responsive={placement === "mobile-bottom" ? "true" : "false"}
+        />
+      </aside>
+    );
+  }
+
+  return (
+    <aside className={`ad-slot ${placement} mock-ad-slot`} aria-label="광고 mock">
+      <span>AD</span>
+      <strong>{placement === "desktop-left-rail" ? "160 x 600" : "Mobile banner"}</strong>
+    </aside>
+  );
+}
+
+function PolicyPage() {
+  return (
+    <section className="policy-page" aria-labelledby="policy-title">
+      <div className="policy-content">
+        <div className="policy-header">
+          <h1 id="policy-title">정책 및 고지</h1>
+          <p>
+            ETF Portfolio Profiler는 ETF 운용사들이 포트폴리오를 어떻게 조정하고 있는지 관찰하기 위한 분석 서비스입니다.
+            구성종목의 수량, 평가금액, 비중 변화를 ETF별·종목별로 비교해 운용 흐름을 파악하고, 사용자가 시장을 해석할 때 참고할 수 있는 맥락을 제공합니다.
+          </p>
+        </div>
+
+        <section>
+          <h2>서비스 소개</h2>
+          <p>
+            이 서비스는 ETF별 변동 랭킹, 단일 ETF 구성종목 변화, 여러 ETF에 걸친 종목별 노출 변화, AI 채팅 기반 화면 해석을 제공합니다.
+            목표는 ETF 운용사의 최근 움직임을 더 빠르게 파악하고, 그 흐름에 따라 사용자가 어떤 관점을 가질지 정리하는 데 도움을 주는 것입니다.
+          </p>
+        </section>
+
+        <section>
+          <h2>개인정보 및 입력 데이터</h2>
+          <p>
+            이 서비스는 화면 분석과 AI 채팅 기능을 제공하기 위해 사용자가 입력한 질문, 현재 화면의 분석 컨텍스트,
+            서비스 요청 처리에 필요한 기술 정보를 처리할 수 있습니다. 민감정보, 계좌정보, 개인 식별정보는 입력하지 않는 것을 권장합니다.
+          </p>
+        </section>
+
+        <section>
+          <h2>AI 채팅 고지</h2>
+          <p>
+            AI 답변은 제공된 화면 데이터와 서버 분석 결과를 바탕으로 생성되지만, 부정확하거나 누락된 해석이 포함될 수 있습니다.
+            중요한 판단 전에는 원본 데이터와 화면의 수치를 함께 확인해야 합니다.
+          </p>
+        </section>
+
+        <section>
+          <h2>광고 및 쿠키</h2>
+          <p>
+            운영 환경에서는 Google AdSense 등 제3자 광고 서비스가 사용될 수 있습니다. 광고 제공 과정에서 쿠키,
+            광고 식별자, 웹 비콘, IP 주소 등의 정보가 광고 개인화, 빈도 제한, 부정 트래픽 방지, 성과 측정 목적으로 사용될 수 있습니다.
+          </p>
+        </section>
+
+        <section>
+          <h2>투자 판단 책임</h2>
+          <p>
+            이 서비스의 분석 결과와 AI 답변은 투자 자문, 매수 추천, 매도 추천이 아닙니다. ETF와 개별 종목에 대한 최종 투자 판단과
+            그 책임은 사용자에게 있습니다.
+          </p>
+        </section>
+
+        <section>
+          <h2>데이터 정확성</h2>
+          <p>
+            데이터는 외부 공개 자료와 수집 시점의 분석 결과를 기반으로 하며, 지연, 누락, 수집 오류, 계산 방식 차이가 있을 수 있습니다.
+            서비스는 데이터의 완전성이나 실시간성을 보장하지 않습니다.
+          </p>
+        </section>
+      </div>
+    </section>
   );
 }
 
@@ -3348,6 +3537,14 @@ function navigateCross() {
     return;
   }
   window.location.hash = "/cross";
+}
+
+function togglePolicyPage(lastAnalysisHash: string, policyOpen: boolean) {
+  if (policyOpen) {
+    window.location.hash = lastAnalysisHash || "/";
+    return;
+  }
+  window.location.hash = "/policy";
 }
 
 function navigateAsset(target: AssetRouteTarget) {

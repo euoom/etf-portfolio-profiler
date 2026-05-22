@@ -320,6 +320,7 @@ function App() {
   const analysisModeRef = useRef<AnalysisMode>("list");
   const chartInstanceRef = useRef<ChartInstance | null>(null);
   const chartRowClickHandlerRef = useRef<((event: ChartClickEvent) => void) | null>(null);
+  const didMountSummaryResetRef = useRef(false);
   const [selectedFund, setSelectedFund] = useState("KR70183J0002");
   const [selectedAssetCode, setSelectedAssetCode] = useState("");
   const [selectedAssetName, setSelectedAssetName] = useState("");
@@ -421,6 +422,9 @@ function App() {
       setPolicyOpen(false);
       const route = parseRoute();
       setAnalysisMode(route.mode);
+      if (route.mode === "list") {
+        setSummaryPage(route.page ?? 1);
+      }
       if (route.ksdFund) {
         setSelectedFund(route.ksdFund);
       }
@@ -623,8 +627,23 @@ function App() {
   }, [summaryRows]);
 
   useEffect(() => {
-    setSummaryPage(1);
+    if (!didMountSummaryResetRef.current) {
+      didMountSummaryResetRef.current = true;
+      return;
+    }
+    if (analysisMode === "list") {
+      navigateListPage(1);
+    } else {
+      setSummaryPage(1);
+    }
   }, [analysisPeriodQuery, etfTypeFilter]);
+
+  useEffect(() => {
+    if (analysisMode !== "list" || etfChangeSummary.isLoading) return;
+    if (summaryPage !== currentSummaryPage) {
+      setListPage(currentSummaryPage);
+    }
+  }, [analysisMode, currentSummaryPage, etfChangeSummary.isLoading, summaryPage]);
 
   const selectedDownloadSet = useMemo(() => new Set(selectedDownloadFunds), [selectedDownloadFunds]);
   const allListRowsSelected = summaryRows.length > 0 && summaryRows.every((item) => selectedDownloadSet.has(item.ksd_fund));
@@ -1313,6 +1332,12 @@ function App() {
 
   function toggleAllListDownloadFunds(checked: boolean) {
     setSelectedDownloadFunds(checked ? summaryRows.map((item) => item.ksd_fund) : []);
+  }
+
+  function setListPage(page: number) {
+    const nextPage = clamp(Math.round(page), 1, summaryPageCount);
+    setSummaryPage(nextPage);
+    navigateListPage(nextPage);
   }
 
   function handleChatBeforeSubmit(message: string) {
@@ -2148,7 +2173,7 @@ function App() {
                 page={currentSummaryPage}
                 pageCount={summaryPageCount}
                 pageSize={ETF_TABLE_PAGE_SIZE}
-                onPageChange={setSummaryPage}
+                onPageChange={setListPage}
               />
             ) : null}
           </section>
@@ -3675,8 +3700,10 @@ function normalizeCommandText(value: string) {
   return value.toLowerCase().replace(/\s+/g, "");
 }
 
-function parseRoute(): { mode: AnalysisMode; ksdFund?: string; assetCode?: string; assetName?: string } {
-  const hash = window.location.hash.replace(/^#/, "");
+function parseRoute(): { mode: AnalysisMode; ksdFund?: string; assetCode?: string; assetName?: string; page?: number } {
+  const { path, params } = parseHashLocation();
+  const page = parsePositivePage(params.get("page"));
+  const hash = path;
   const etfMatch = hash.match(/^\/etf\/([^/]+)$/);
   if (etfMatch) {
     return { mode: "single", ksdFund: decodeURIComponent(etfMatch[1]) };
@@ -3692,7 +3719,23 @@ function parseRoute(): { mode: AnalysisMode; ksdFund?: string; assetCode?: strin
   if (hash === "/cross") {
     return { mode: "cross" };
   }
-  return { mode: "list" };
+  return { mode: "list", page };
+}
+
+function parseHashLocation() {
+  const rawHash = window.location.hash.replace(/^#/, "") || "/";
+  const [rawPath, rawQuery = ""] = rawHash.split("?");
+  return {
+    path: rawPath || "/",
+    params: new URLSearchParams(rawQuery),
+  };
+}
+
+function parsePositivePage(value: string | null) {
+  if (!value) return undefined;
+  const page = Number(value);
+  if (!Number.isFinite(page) || page < 1) return undefined;
+  return Math.floor(page);
 }
 
 function navigateHome() {
@@ -3701,6 +3744,15 @@ function navigateHome() {
     return;
   }
   window.location.hash = "/";
+}
+
+function navigateListPage(page: number) {
+  const nextHash = page > 1 ? `#/?page=${page}` : "#/";
+  if (window.location.hash === nextHash) {
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    return;
+  }
+  window.location.hash = nextHash;
 }
 
 function navigateEtf(ksdFund: string) {
@@ -4158,8 +4210,22 @@ function PaginationBar({
   pageSize: number;
   onPageChange: (page: number) => void;
 }) {
+  const [pageInput, setPageInput] = useState(String(page));
   const start = total ? (page - 1) * pageSize + 1 : 0;
   const end = Math.min(total, page * pageSize);
+
+  useEffect(() => {
+    setPageInput(String(page));
+  }, [page]);
+
+  function commitPageInput() {
+    const parsedPage = Number(pageInput);
+    if (!Number.isFinite(parsedPage)) {
+      setPageInput(String(page));
+      return;
+    }
+    onPageChange(parsedPage);
+  }
 
   return (
     <div className="pagination-bar">
@@ -4168,19 +4234,36 @@ function PaginationBar({
       </span>
       <div className="pagination-actions">
         <button disabled={page <= 1} onClick={() => onPageChange(1)}>
-          처음
+          &lt;&lt;
         </button>
         <button disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
-          이전
+          &lt;
         </button>
-        <strong>
-          {page} / {pageCount}
-        </strong>
+        <label className="pagination-page-input">
+          <input
+            aria-label="페이지 번호"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            value={pageInput}
+            onChange={(event) => setPageInput(event.target.value)}
+            onBlur={commitPageInput}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitPageInput();
+              }
+              if (event.key === "Escape") {
+                setPageInput(String(page));
+              }
+            }}
+          />
+          <span>/ {pageCount}</span>
+        </label>
         <button disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>
-          다음
+          &gt;
         </button>
         <button disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>
-          마지막
+          &gt;&gt;
         </button>
       </div>
     </div>

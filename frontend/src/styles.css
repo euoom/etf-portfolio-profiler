@@ -1042,7 +1042,7 @@ body.resizing-ai-panel {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 54px;
+  min-width: 36px;
   min-height: 30px;
   padding: 0 9px;
   border: 1px solid var(--border-strong);
@@ -1053,11 +1053,33 @@ body.resizing-ai-panel {
   font-size: 12px;
 }
 
-.pagination-actions strong {
-  min-width: 54px;
+.pagination-page-input {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.pagination-page-input input {
+  width: 44px;
+  min-height: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
   color: var(--text);
   text-align: center;
   font-size: 12px;
+  font-weight: 760;
+}
+
+.pagination-page-input input:focus {
+  border-color: var(--accent-border);
+  outline: 2px solid var(--accent-soft);
 }
 
 .empty-state {

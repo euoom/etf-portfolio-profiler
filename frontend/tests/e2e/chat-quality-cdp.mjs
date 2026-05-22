@@ -46,13 +46,13 @@ function assessAnswer(answer) {
   if (/^데이터를 확인하는 중입니다|분석 중입니다/.test(answer)) {
     issues.push("로딩 문구가 답변 본문에 남음");
   }
-  if (/\$|USD|달러/i.test(answer)) {
+  if (hasUsdMoneyUnitMisuse(answer)) {
     issues.push("금액 단위에 달러/USD가 섞임");
   }
-  if (/[最大幅度迹象関連相反非常]| фон드|inúmer|合成|変わった|同一|走了进来|紧缩/.test(answer)) {
+  if (/[最大幅度迹象関連相反非常複数株]| фон드|inúmer|合成|変わった|同一|走了进来|紧缩/.test(answer)) {
     issues.push("비한국어 조각이 섞임");
   }
-  if (/원화예금[\s\S]{0,120}수량|현금[\s\S]{0,120}수량 변화율/.test(answer)) {
+  if (hasCashQuantityMisuse(answer)) {
     issues.push("현금성 항목에 수량 변화율/수량 설명이 노출됨");
   }
   if (/한미반도체[^\n]{0,40}수량[^\n]{0,40}-32\.20%/.test(answer)) {
@@ -71,6 +71,20 @@ function assessAnswer(answer) {
     issues.push("오류/데모 응답");
   }
   return issues;
+}
+
+function hasUsdMoneyUnitMisuse(answer) {
+  return /(?:약\s*)?[\d,.]+(?:만|억)?\s*(?<!미)(?:달러|USD)|\$\s*[\d,.]+/i.test(answer);
+}
+
+function hasCashQuantityMisuse(answer) {
+  const cashQuantityMentions = answer.match(/(?:원화예금|현금)[^\n|.。]{0,120}수량[^\n|.。]{0,80}/g) ?? [];
+  return cashQuantityMentions.some((text) => {
+    if (/표시하지|제외|해석하지|아닌 금액 기준|수량처럼 해석하지/.test(text)) {
+      return false;
+    }
+    return /(?:\+|-)?[\d,.]+(?:%|주)|증가|감소|변화율/.test(text);
+  });
 }
 
 function buildMarkdownLog(results) {

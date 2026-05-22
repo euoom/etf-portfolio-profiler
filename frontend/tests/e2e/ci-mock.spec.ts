@@ -40,7 +40,7 @@ test("can abort an in-flight chat request", async ({ page }) => {
 
 test("opens command palette and separates search from update commands", async ({ page }) => {
   await page.goto("./");
-  await page.keyboard.press("Control+Shift+P");
+  await page.getByRole("button", { name: "명령 팔레트 열기" }).click();
 
   const palette = page.getByRole("dialog", { name: "명령 팔레트" });
   await expect(palette).toBeVisible();
@@ -49,7 +49,7 @@ test("opens command palette and separates search from update commands", async ({
   await input.fill(">");
 
   await expect(page.getByText("데이터 업데이트").first()).toBeVisible();
-  await expect(page.getByRole("option", { name: /TIGER ETF 상품 목록 업데이트/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /ETF 상품 목록 업데이트/ })).toBeVisible();
   await expect(page.getByText("ETF 검색")).toHaveCount(0);
   await expect(page.getByText("종목 검색")).toHaveCount(0);
 });

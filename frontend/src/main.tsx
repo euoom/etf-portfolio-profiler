@@ -15,6 +15,8 @@ const adsenseClientId = import.meta.env.VITE_ADSENSE_CLIENT_ID || "";
 const adsenseDesktopSlotId = import.meta.env.VITE_ADSENSE_DESKTOP_SLOT_ID || "";
 const adsenseMobileSlotId = import.meta.env.VITE_ADSENSE_MOBILE_SLOT_ID || "";
 const queryClient = new QueryClient();
+const ETF_SUMMARY_LIMIT = 300;
+const ETF_TABLE_PAGE_SIZE = 20;
 
 type AnalysisMode = "list" | "single" | "cross" | "asset";
 type AssetTypeFilter = "stock" | "listed_product" | "fixed_income" | "derivative" | "cash" | "all";
@@ -183,6 +185,45 @@ type ChatAction = {
   target: AssetRouteTarget | { ksd_fund: string };
 };
 
+type AppToast = {
+  id: string;
+  tone: "info" | "success" | "error";
+  title: string;
+  message?: string;
+};
+
+type CollectProductsResponse = {
+  collected: number;
+};
+
+type CollectHoldingsResponse = {
+  snapshot_id: number;
+  ksd_fund: string;
+  base_date: string;
+  holdings: number;
+  content_hash: string;
+};
+
+type CollectRecentHoldingsResponse = {
+  ksd_fund: string;
+  days: number;
+  business_dates: string[];
+  snapshots: unknown[];
+  skipped: string[];
+  unavailable: string[];
+};
+
+type CollectRecentWatchlistResponse = {
+  days: number;
+  limit: number;
+  funds: {
+    ksd_fund: string;
+    name: string;
+    snapshots: unknown[];
+    skipped: string[];
+  }[];
+};
+
 type ChatContextSection = {
   title: string;
   rows: Record<string, unknown>[];
@@ -308,6 +349,9 @@ function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
+  const [toasts, setToasts] = useState<AppToast[]>([]);
+  const [viewRefreshKey, setViewRefreshKey] = useState(0);
+  const [summaryPage, setSummaryPage] = useState(1);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileActiveTab, setMobileActiveTab] = useState<"table" | "chart">("table");
   const [isAiClosing, setIsAiClosing] = useState(false);
@@ -410,7 +454,7 @@ function App() {
 
   const etfChangeSummary = useQuery({
     queryKey: ["etf-change-summary", analysisPeriodQuery],
-    queryFn: () => api<EtfChangeSummaryResponse>(`/api/analysis/etf-change-summary?${analysisPeriodQuery}&limit=100`),
+    queryFn: () => api<EtfChangeSummaryResponse>(`/api/analysis/etf-change-summary?${analysisPeriodQuery}&limit=${ETF_SUMMARY_LIMIT}`),
   });
 
   const assetExposures = useQuery({
@@ -420,12 +464,12 @@ function App() {
   });
 
   const collectProducts = useMutation({
-    mutationFn: () => api<{ collected: number }>("/api/collect/tiger/products", { method: "POST" }),
+    mutationFn: () => api<CollectProductsResponse>("/api/collect/tiger/products", { method: "POST" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["etf-change-summary"] }),
   });
 
   const collectHoldings = useMutation({
-    mutationFn: () => api(`/api/collect/tiger/holdings/${selectedFund}`, { method: "POST" }),
+    mutationFn: () => api<CollectHoldingsResponse>(`/api/collect/tiger/holdings/${selectedFund}`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["holdings-pivot"] });
       queryClient.invalidateQueries({ queryKey: ["etf-change-summary"] });
@@ -433,7 +477,7 @@ function App() {
   });
 
   const collectRecentHoldings = useMutation({
-    mutationFn: () => api(`/api/collect/tiger/holdings/${selectedFund}/recent?days=${periodDays}`, { method: "POST" }),
+    mutationFn: () => api<CollectRecentHoldingsResponse>(`/api/collect/tiger/holdings/${selectedFund}/recent?days=${periodDays}`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["holdings-pivot"] });
       queryClient.invalidateQueries({ queryKey: ["etf-change-summary"] });
@@ -441,7 +485,7 @@ function App() {
   });
 
   const collectRecentWatchlist = useMutation({
-    mutationFn: () => api(`/api/collect/tiger/recent-watchlist?days=${periodDays}&limit=20`, { method: "POST" }),
+    mutationFn: () => api<CollectRecentWatchlistResponse>(`/api/collect/tiger/recent-watchlist?days=${periodDays}&limit=0`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["holdings-pivot"] });
       queryClient.invalidateQueries({ queryKey: ["cross-etf-weight-changes"] });
@@ -451,6 +495,13 @@ function App() {
 
   const rawSummaryRows = etfChangeSummary.data?.rows ?? [];
   const summaryRows = useMemo(() => filterSummaryRowsByEtfType(rawSummaryRows, etfTypeFilter), [etfTypeFilter, rawSummaryRows]);
+  const summaryPageCount = Math.max(1, Math.ceil(summaryRows.length / ETF_TABLE_PAGE_SIZE));
+  const currentSummaryPage = Math.min(summaryPage, summaryPageCount);
+  const summaryPageStart = summaryRows.length ? (currentSummaryPage - 1) * ETF_TABLE_PAGE_SIZE : 0;
+  const summaryPageRows = useMemo(
+    () => summaryRows.slice(summaryPageStart, summaryPageStart + ETF_TABLE_PAGE_SIZE),
+    [summaryPageStart, summaryRows],
+  );
   const pivotRows = pivot.data?.rows ?? [];
   const crossRows = crossEtfChanges.data?.rows ?? [];
   const pivotDates = pivot.data?.dates ?? [];
@@ -570,6 +621,10 @@ function App() {
     const currentFunds = new Set(summaryRows.map((item) => item.ksd_fund));
     setSelectedDownloadFunds((current) => current.filter((ksdFund) => currentFunds.has(ksdFund)));
   }, [summaryRows]);
+
+  useEffect(() => {
+    setSummaryPage(1);
+  }, [analysisPeriodQuery, etfTypeFilter]);
 
   const selectedDownloadSet = useMemo(() => new Set(selectedDownloadFunds), [selectedDownloadFunds]);
   const allListRowsSelected = summaryRows.length > 0 && summaryRows.every((item) => selectedDownloadSet.has(item.ksd_fund));
@@ -1375,43 +1430,76 @@ function App() {
     navigateEtf(target.ksd_fund);
   }
 
+  function dismissToast(id: string) {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }
+
+  function showToast(toast: Omit<AppToast, "id">, timeoutMs = 10400) {
+    const id = newChatId();
+    setToasts((current) => [...current.slice(-3), { ...toast, id }]);
+    window.setTimeout(() => dismissToast(id), timeoutMs);
+    return id;
+  }
+
+  async function runCommandWithToast<T>({
+    loadingTitle,
+    loadingMessage,
+    successTitle,
+    successMessage,
+    action,
+  }: {
+    loadingTitle: string;
+    loadingMessage?: string;
+    successTitle: string;
+    successMessage: (result: T) => string;
+    action: () => Promise<T>;
+  }) {
+    showToast({ tone: "info", title: loadingTitle, message: loadingMessage }, 6400);
+    try {
+      const result = await action();
+      showToast({ tone: "success", title: successTitle, message: successMessage(result) });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "업데이트에 실패했습니다",
+        message: error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다.",
+      }, 14400);
+    }
+  }
+
   const commandActionItems = useMemo<CommandPaletteItem[]>(() => {
-    return [
+    const items: CommandPaletteItem[] = [
       {
         id: "collect-products",
         group: "데이터 업데이트",
-        title: "TIGER ETF 상품 목록 업데이트",
-        subtitle: collectProducts.isPending ? "업데이트 중" : "전체 ETF 기본 목록을 다시 수집합니다.",
-        keywords: ["수집", "업데이트", "ETF목록", "상품"],
+        title: "ETF 상품 목록 업데이트",
+        subtitle: collectProducts.isPending ? "업데이트 중" : "등록된 ETF 운용사의 기본 상품 목록을 갱신합니다.",
+        keywords: ["수집", "업데이트", "ETF목록", "상품", "TIGER"],
         disabled: collectProducts.isPending,
-        run: () => collectProducts.mutate(),
+        run: () =>
+          runCommandWithToast({
+            loadingTitle: "ETF 상품 목록 업데이트 중",
+            loadingMessage: "운용사 상품 목록을 다시 확인하고 있습니다.",
+            successTitle: "ETF 상품 목록 업데이트 완료",
+            successMessage: (result) => `${formatCompactNumber(result.collected)}개 상품을 갱신했습니다.`,
+            action: () => collectProducts.mutateAsync(),
+          }),
       },
       {
         id: "collect-recent-watchlist",
         group: "데이터 업데이트",
-        title: `현재 기간 대표 ETF 상세 데이터 업데이트`,
-        subtitle: collectRecentWatchlist.isPending ? "업데이트 중" : `${periodLabel} 기준 대표 ETF 구성종목을 갱신합니다.`,
-        keywords: ["수집", "업데이트", "대표", "ETF상세", "기간"],
+        title: `현재 기간 전체 ETF 상세 데이터 업데이트`,
+        subtitle: collectRecentWatchlist.isPending ? "업데이트 중" : `${periodLabel} 기준 전체 ETF 구성종목을 갱신합니다.`,
+        keywords: ["수집", "업데이트", "전체", "ETF상세", "기간"],
         disabled: collectRecentWatchlist.isPending,
-        run: () => collectRecentWatchlist.mutate(),
-      },
-      {
-        id: "collect-selected-recent",
-        group: "데이터 업데이트",
-        title: "현재 ETF 상세 데이터 업데이트",
-        subtitle: collectRecentHoldings.isPending ? "업데이트 중" : `${selectedEtfName}의 ${periodLabel} 구성종목을 갱신합니다.`,
-        keywords: ["수집", "업데이트", "선택", "ETF상세", selectedEtfName],
-        disabled: collectRecentHoldings.isPending,
-        run: () => collectRecentHoldings.mutate(),
-      },
-      {
-        id: "collect-selected-latest",
-        group: "데이터 업데이트",
-        title: "현재 ETF 최신 구성종목 업데이트",
-        subtitle: collectHoldings.isPending ? "업데이트 중" : `${selectedEtfName}의 최신 구성종목 스냅샷을 갱신합니다.`,
-        keywords: ["수집", "업데이트", "선택", "최신", "구성종목", selectedEtfName],
-        disabled: collectHoldings.isPending,
-        run: () => collectHoldings.mutate(),
+        run: () =>
+          runCommandWithToast({
+            loadingTitle: "전체 ETF 상세 데이터 업데이트 중",
+            loadingMessage: "기존 스냅샷은 재사용하고 필요한 날짜만 수집합니다.",
+            successTitle: "전체 ETF 상세 데이터 업데이트 완료",
+            successMessage: formatRecentWatchlistCollectSummary,
+            action: () => collectRecentWatchlist.mutateAsync(),
+          }),
       },
       {
         id: "refresh-current-view",
@@ -1420,14 +1508,62 @@ function App() {
         subtitle: "분석 API 캐시를 비우고 화면 데이터를 다시 가져옵니다.",
         keywords: ["새로고침", "refresh", "reload", "캐시"],
         run: () => {
+          setViewRefreshKey((current) => current + 1);
           queryClient.invalidateQueries({ queryKey: ["holdings-pivot"] });
           queryClient.invalidateQueries({ queryKey: ["cross-etf-weight-changes"] });
           queryClient.invalidateQueries({ queryKey: ["etf-change-summary"] });
           queryClient.invalidateQueries({ queryKey: ["asset-exposures"] });
+          showToast({
+            tone: "success",
+            title: "현재 화면 데이터 새로고침",
+            message: "분석 API 캐시를 비우고 화면 데이터를 다시 불러옵니다.",
+          });
         },
       },
     ];
+
+    if (analysisMode === "single") {
+      items.splice(
+        2,
+        0,
+        {
+          id: "collect-selected-recent",
+          group: "데이터 업데이트",
+          title: "현재 ETF 상세 데이터 업데이트",
+          subtitle: collectRecentHoldings.isPending ? "업데이트 중" : `${selectedEtfName}의 ${periodLabel} 구성종목을 갱신합니다.`,
+          keywords: ["수집", "업데이트", "선택", "ETF상세", selectedEtfName],
+          disabled: collectRecentHoldings.isPending,
+          run: () =>
+            runCommandWithToast({
+              loadingTitle: "현재 ETF 상세 데이터 업데이트 중",
+              loadingMessage: `${selectedEtfName}의 ${periodLabel} 구성종목을 확인합니다.`,
+              successTitle: "현재 ETF 상세 데이터 업데이트 완료",
+              successMessage: formatRecentHoldingsCollectSummary,
+              action: () => collectRecentHoldings.mutateAsync(),
+            }),
+        },
+        {
+          id: "collect-selected-latest",
+          group: "데이터 업데이트",
+          title: "현재 ETF 최신 구성종목 업데이트",
+          subtitle: collectHoldings.isPending ? "업데이트 중" : `${selectedEtfName}의 최신 구성종목 스냅샷을 갱신합니다.`,
+          keywords: ["수집", "업데이트", "선택", "최신", "구성종목", selectedEtfName],
+          disabled: collectHoldings.isPending,
+          run: () =>
+            runCommandWithToast({
+              loadingTitle: "현재 ETF 최신 구성종목 업데이트 중",
+              loadingMessage: `${selectedEtfName}의 최신 스냅샷을 수집합니다.`,
+              successTitle: "현재 ETF 최신 구성종목 업데이트 완료",
+              successMessage: (result) => `${result.base_date} 기준 ${formatCompactNumber(result.holdings)}개 구성종목을 저장했습니다.`,
+              action: () => collectHoldings.mutateAsync(),
+            }),
+        },
+      );
+    }
+
+    return items;
   }, [
+    analysisMode,
     collectProducts,
     collectHoldings,
     collectRecentHoldings,
@@ -1780,7 +1916,7 @@ function App() {
             </button>
           </div>
           <section className={`pivot-panel canvas-section${mobileActiveTab === "table" ? "" : " mobile-hidden"}`}>
-            <div className="pivot-grid-wrap">
+            <div className="pivot-grid-wrap refreshable-view" key={`grid-${viewRefreshKey}`}>
               {isCurrentTableLoading ? (
                 <LoadingState title="데이터를 불러오는 중입니다" body={getLoadingMessage(analysisMode)} />
               ) : analysisMode === "list" ? (
@@ -1810,7 +1946,7 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {summaryRows.map((item) => (
+                      {summaryPageRows.map((item) => (
                         <tr key={item.ksd_fund}>
                           {listDownloadMode && (
                             <td className="select-column">
@@ -1840,7 +1976,7 @@ function App() {
                     </tbody>
                   </table>
                 ) : (
-                  <EmptyState title="수집된 ETF 변동 데이터가 없습니다" body="상단의 ETF 목록과 대표 ETF 수집을 실행하면 변동 랭킹이 표시됩니다." />
+                  <EmptyState title="수집된 ETF 변동 데이터가 없습니다" body="ETF 상품 목록과 전체 ETF 상세 데이터 업데이트를 실행하면 변동 랭킹이 표시됩니다." />
                 )
               ) : analysisMode === "single" ? (
                 pivotRows.length ? (
@@ -1953,7 +2089,7 @@ function App() {
                     </tbody>
                   </table>
                 ) : (
-                  <EmptyState title="종목 합산 분석 데이터가 없습니다" body="대표 ETF 수집 후 여러 ETF에 걸친 종목별 합산 비중 변화를 볼 수 있습니다." />
+                  <EmptyState title="종목 합산 분석 데이터가 없습니다" body="전체 ETF 상세 데이터 업데이트 후 여러 ETF에 걸친 종목별 합산 비중 변화를 볼 수 있습니다." />
                 )
               ) : selectedAssetCode ? (
                 assetExposures.isLoading ? (
@@ -2006,6 +2142,15 @@ function App() {
                 <EmptyState title="선택한 종목 데이터를 찾을 수 없습니다" body="종목별 화면에서 종목명을 다시 선택하거나 분석 기간을 조정하세요." />
               )}
             </div>
+            {analysisMode === "list" && summaryRows.length > ETF_TABLE_PAGE_SIZE ? (
+              <PaginationBar
+                total={summaryRows.length}
+                page={currentSummaryPage}
+                pageCount={summaryPageCount}
+                pageSize={ETF_TABLE_PAGE_SIZE}
+                onPageChange={setSummaryPage}
+              />
+            ) : null}
           </section>
 
           <section className={`chart-panel canvas-section${mobileActiveTab === "chart" ? "" : " mobile-hidden"}`}>
@@ -2073,14 +2218,16 @@ function App() {
             {isCurrentChartLoading ? (
               <LoadingState title="차트 데이터를 준비하는 중입니다" body={getLoadingMessage(analysisMode)} />
             ) : hasChartData ? (
-              <ReactECharts
-                key={analysisMode}
-                notMerge
-                option={chartOption}
-                onChartReady={handleChartReady}
-                onEvents={chartEvents}
-                style={{ height: "100%", minHeight: 300 }}
-              />
+              <div className="refreshable-view chart-refresh-frame" key={`chart-wrap-${viewRefreshKey}`}>
+                <ReactECharts
+                  key={`${analysisMode}-${viewRefreshKey}`}
+                  notMerge
+                  option={chartOption}
+                  onChartReady={handleChartReady}
+                  onEvents={chartEvents}
+                  style={{ height: "100%", minHeight: 300 }}
+                />
+              </div>
             ) : (
               <EmptyState title="차트로 표시할 데이터가 없습니다" body="상단 수집 버튼으로 최신 데이터를 불러오면 이 영역이 갱신됩니다." />
             )}
@@ -2153,6 +2300,7 @@ function App() {
         onClose={closeCommandPalette}
         onRun={runCommandItem}
       />
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
@@ -2347,6 +2495,19 @@ function formatSignedPercentPointOrDash(value: number | null | undefined) {
   return formatSignedPercentPoint(value);
 }
 
+function formatRecentHoldingsCollectSummary(result: CollectRecentHoldingsResponse) {
+  const collectedCount = result.snapshots.length;
+  const skippedCount = result.skipped.length;
+  const unavailableCount = result.unavailable.length;
+  return `수집 ${formatCompactNumber(collectedCount)}개, 재사용 ${formatCompactNumber(skippedCount)}개, 미제공 ${formatCompactNumber(unavailableCount)}개 날짜를 확인했습니다.`;
+}
+
+function formatRecentWatchlistCollectSummary(result: CollectRecentWatchlistResponse) {
+  const collectedCount = result.funds.reduce((sum, fund) => sum + fund.snapshots.length, 0);
+  const skippedCount = result.funds.reduce((sum, fund) => sum + fund.skipped.length, 0);
+  return `${formatCompactNumber(result.funds.length)}개 ETF 처리, 수집 ${formatCompactNumber(collectedCount)}개, 재사용 ${formatCompactNumber(skippedCount)}개 스냅샷입니다.`;
+}
+
 function isZeroLike(value: number | null | undefined, epsilon = 1e-9): value is null | undefined {
   return value === null || value === undefined || Math.abs(value) <= epsilon;
 }
@@ -2412,7 +2573,7 @@ type CommandPaletteItem = {
   subtitle?: string;
   keywords?: string[];
   disabled?: boolean;
-  run: () => void;
+  run: () => void | Promise<void>;
 };
 
 const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel({
@@ -2804,6 +2965,26 @@ function CommandPalette({
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function ToastStack({ toasts, onDismiss }: { toasts: AppToast[]; onDismiss: (id: string) => void }) {
+  if (!toasts.length) return null;
+
+  return (
+    <div className="toast-stack" role="status" aria-live="polite">
+      {toasts.map((toast) => (
+        <div className={`app-toast ${toast.tone}`} key={toast.id}>
+          <div>
+            <strong>{toast.title}</strong>
+            {toast.message ? <span>{toast.message}</span> : null}
+          </div>
+          <button aria-label="알림 닫기" title="알림 닫기" onClick={() => onDismiss(toast.id)}>
+            <X size={14} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -3960,6 +4141,48 @@ function EmptyState({ title, body }: { title: string; body: string }) {
     <div className="empty-state">
       <strong>{title}</strong>
       <span>{body}</span>
+    </div>
+  );
+}
+
+function PaginationBar({
+  total,
+  page,
+  pageCount,
+  pageSize,
+  onPageChange,
+}: {
+  total: number;
+  page: number;
+  pageCount: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  const start = total ? (page - 1) * pageSize + 1 : 0;
+  const end = Math.min(total, page * pageSize);
+
+  return (
+    <div className="pagination-bar">
+      <span>
+        전체 {formatCompactNumber(total)}개 중 {formatCompactNumber(start)}-{formatCompactNumber(end)} 표시
+      </span>
+      <div className="pagination-actions">
+        <button disabled={page <= 1} onClick={() => onPageChange(1)}>
+          처음
+        </button>
+        <button disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+          이전
+        </button>
+        <strong>
+          {page} / {pageCount}
+        </strong>
+        <button disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>
+          다음
+        </button>
+        <button disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>
+          마지막
+        </button>
+      </div>
     </div>
   );
 }

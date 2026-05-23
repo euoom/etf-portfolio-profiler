@@ -72,6 +72,49 @@ def _complete_snapshot_dates(
     return sorted(dates)
 
 
+def _asset_snapshot_dates(
+    conn: sqlite3.Connection,
+    *,
+    asset_code: str,
+    asset_name: str | None,
+    start_date: str | None,
+    end_date: str | None,
+    days: int,
+) -> list[str]:
+    if start_date or end_date:
+        filter_sql, filter_params = _date_filter_sql("s.base_date", start_date=start_date, end_date=end_date, days=days)
+    else:
+        filter_sql, filter_params = "1 = 1", ()
+    asset_name_filter = "AND h.asset_name = ?" if asset_name is not None else ""
+    asset_params = (asset_code, asset_name) if asset_name is not None else (asset_code,)
+    date_rows = conn.execute(
+        f"""
+        WITH date_counts AS (
+            SELECT s.base_date, COUNT(DISTINCT s.etf_id) AS etf_count
+            FROM etf_daily_holding h
+            JOIN etf_daily_snapshot s ON s.snapshot_id = h.snapshot_id
+            WHERE h.asset_code = ?
+              {asset_name_filter}
+              AND {filter_sql}
+            GROUP BY s.base_date
+        ),
+        max_count AS (
+            SELECT MAX(etf_count) AS etf_count
+            FROM date_counts
+        )
+        SELECT base_date
+        FROM date_counts
+        WHERE etf_count = (SELECT etf_count FROM max_count)
+        ORDER BY base_date DESC
+        """,
+        (*asset_params, *filter_params),
+    ).fetchall()
+    dates = [row["base_date"] for row in date_rows]
+    if not start_date and not end_date:
+        dates = dates[:days]
+    return sorted(dates)
+
+
 def list_etfs(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         """
@@ -743,7 +786,14 @@ def asset_exposures(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict:
-    dates = _complete_snapshot_dates(conn, start_date=start_date, end_date=end_date, days=days)
+    dates = _asset_snapshot_dates(
+        conn,
+        asset_code=asset_code,
+        asset_name=asset_name,
+        start_date=start_date,
+        end_date=end_date,
+        days=days,
+    )
     if not dates:
         return {"dates": [], "rows": []}
 

@@ -1,9 +1,12 @@
 from typing import Any
 import json
 import logging
+import os
 import time
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 from pydantic import BaseModel
+from bs4 import BeautifulSoup
 import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -32,6 +35,38 @@ class ChatIntent(BaseModel):
     entity_name: str | None = None
     entity_code: str | None = None
     reason: str | None = None
+
+
+class AssetNewsItem(BaseModel):
+    id: str
+    title: str
+    summary: str | None = None
+    source: str | None = None
+    created_at: str | None = None
+    url: str
+
+
+class DisclosureItem(BaseModel):
+    id: str
+    title: str
+    summary: str | None = None
+    source: str | None = None
+    created_at: str | None = None
+    url: str
+
+
+class AssetNewsResponse(BaseModel):
+    asset_code: str
+    provider: str
+    provider_news_url: str
+    order_by: str
+    items: list[AssetNewsItem]
+
+
+class AssetDisclosureResponse(BaseModel):
+    asset_code: str
+    provider: str
+    items: list[DisclosureItem]
 
 
 SYSTEM_PROMPT = """
@@ -81,17 +116,6 @@ ETF 브랜드명 `TIGER`는 항상 대문자로 표기한다.
 
 
 def _collect_missing_recent_holdings(ksd_fund: str, days: int) -> dict:
-    with get_connection() as conn:
-        recent_existing_dates = _recent_existing_snapshot_dates(conn, ksd_fund, days)
-    if len(recent_existing_dates) >= days:
-        return {
-            "business_dates": sorted(recent_existing_dates),
-            "snapshots": [],
-            "skipped": sorted(recent_existing_dates),
-            "unavailable": [],
-            "fast_skipped": True,
-        }
-
     collector = TigerCollector()
     try:
         fix_dates = recent_weekdays(collector.latest_fix_date(ksd_fund), days)
@@ -100,6 +124,15 @@ def _collect_missing_recent_holdings(ksd_fund: str, days: int) -> dict:
                 fix_date
                 for fix_date in fix_dates
                 if snapshot_exists(conn, ksd_fund, fix_date.replace(".", "-"))
+            }
+        if len(existing_dates) >= len(fix_dates):
+            skipped = [fix_date.replace(".", "-") for fix_date in fix_dates]
+            return {
+                "business_dates": skipped,
+                "snapshots": [],
+                "skipped": skipped,
+                "unavailable": [],
+                "fast_skipped": True,
             }
 
         snapshots = []
@@ -133,21 +166,6 @@ def _collect_missing_recent_holdings(ksd_fund: str, days: int) -> dict:
         "unavailable": unavailable,
         "fast_skipped": False,
     }
-
-
-def _recent_existing_snapshot_dates(conn, ksd_fund: str, days: int) -> list[str]:
-    rows = conn.execute(
-        """
-        SELECT DISTINCT s.base_date
-        FROM etf_daily_snapshot s
-        JOIN etf e ON e.etf_id = s.etf_id
-        WHERE e.ksd_fund = ?
-        ORDER BY s.base_date DESC
-        LIMIT ?
-        """,
-        (ksd_fund, days),
-    ).fetchall()
-    return [row["base_date"] for row in rows]
 
 
 def _chat_user_prompt(message: str, view_context: dict[str, Any] | None, history: list[dict[str, str]] | None = None) -> str:
@@ -1298,23 +1316,26 @@ def collect_recent_tiger_watchlist(days: int = 3, limit: int = 5) -> dict:
         for fund in funds:
             ksd_fund = fund["ksd_fund"]
             fund_result = {"ksd_fund": ksd_fund, "name": fund["name"], "snapshots": [], "skipped": [], "fast_skipped": False}
-            with get_connection() as conn:
-                recent_existing_dates = _recent_existing_snapshot_dates(conn, ksd_fund, days)
-            if len(recent_existing_dates) >= days:
-                fund_result["skipped"].extend(sorted(recent_existing_dates))
-                fund_result["fast_skipped"] = True
-                results.append(fund_result)
-                continue
 
             if collector is None:
                 collector = TigerCollector()
             fix_dates = recent_weekdays(collector.latest_fix_date(ksd_fund), days)
+            with get_connection() as conn:
+                existing_dates = {
+                    fix_date.replace(".", "-")
+                    for fix_date in fix_dates
+                    if snapshot_exists(conn, ksd_fund, fix_date.replace(".", "-"))
+                }
+            if len(existing_dates) >= len(fix_dates):
+                fund_result["skipped"].extend([fix_date.replace(".", "-") for fix_date in fix_dates])
+                fund_result["fast_skipped"] = True
+                results.append(fund_result)
+                continue
             for fix_date in fix_dates:
                 base_date = fix_date.replace(".", "-")
-                with get_connection() as conn:
-                    if snapshot_exists(conn, ksd_fund, base_date):
-                        fund_result["skipped"].append(base_date)
-                        continue
+                if base_date in existing_dates:
+                    fund_result["skipped"].append(base_date)
+                    continue
 
                 snapshot = collector.fetch_holdings_snapshot(ksd_fund=ksd_fund, fix_date=fix_date)
                 if not snapshot.holdings:
@@ -1335,6 +1356,46 @@ def collect_recent_tiger_watchlist(days: int = 3, limit: int = 5) -> dict:
             collector.close()
 
     return {"days": days, "limit": limit, "funds": results}
+
+
+@router.post("/collect/tiger/asset-recent")
+def collect_recent_tiger_asset(asset_code: str, asset_name: str | None = None, days: int = 3) -> dict:
+    normalized_asset_name = str(asset_name or "").strip() or None
+    with get_connection() as conn:
+        asset_name_filter = "AND h.asset_name = ?" if normalized_asset_name else ""
+        params: tuple[Any, ...] = (asset_code, normalized_asset_name) if normalized_asset_name else (asset_code,)
+        funds = conn.execute(
+            f"""
+            SELECT DISTINCT e.ksd_fund, e.name
+            FROM etf_daily_holding h
+            JOIN etf_daily_snapshot s ON s.snapshot_id = h.snapshot_id
+            JOIN etf e ON e.etf_id = s.etf_id
+            WHERE h.asset_code = ?
+              {asset_name_filter}
+            ORDER BY COALESCE(e.net_assets_krw_100m, 0) DESC, e.name
+            """,
+            params,
+        ).fetchall()
+
+    results = []
+    for fund in funds:
+        result = _collect_missing_recent_holdings(fund["ksd_fund"], days)
+        results.append(
+            {
+                "ksd_fund": fund["ksd_fund"],
+                "name": fund["name"],
+                "snapshots": result["snapshots"],
+                "skipped": result["skipped"],
+                "unavailable": result["unavailable"],
+            }
+        )
+
+    return {
+        "asset_code": asset_code,
+        "asset_name": normalized_asset_name,
+        "days": days,
+        "funds": results,
+    }
 
 
 @router.get("/etfs")
@@ -1388,6 +1449,33 @@ def get_asset_exposures(
         )
 
 
+@router.get("/assets/{asset_code}/news")
+def get_asset_news(asset_code: str, size: int = 20) -> AssetNewsResponse:
+    normalized_code = _normalize_kr_stock_code(asset_code)
+    safe_size = max(1, min(size, 20))
+    provider = _news_provider_name()
+    news = _fetch_asset_news(provider, normalized_code, safe_size)
+    return AssetNewsResponse(
+        asset_code=normalized_code,
+        provider=provider,
+        provider_news_url=_provider_news_url(provider, normalized_code),
+        order_by="latest",
+        items=news,
+    )
+
+
+@router.get("/assets/{asset_code}/disclosures")
+def get_asset_disclosures(asset_code: str, size: int = 20) -> AssetDisclosureResponse:
+    normalized_code = _normalize_kr_stock_code(asset_code)
+    safe_size = max(1, min(size, 20))
+    items = _fetch_dart_disclosures(normalized_code, safe_size)
+    return AssetDisclosureResponse(
+        asset_code=normalized_code,
+        provider="dart",
+        items=items,
+    )
+
+
 @router.post("/chat")
 def chat(request: ChatRequest) -> dict:
     try:
@@ -1438,3 +1526,289 @@ def _http_status_error_text(exc: httpx.HTTPStatusError) -> str:
         return exc.response.text
     except Exception:
         return f"HTTP {exc.response.status_code}"
+
+
+def _normalize_kr_stock_code(asset_code: str) -> str:
+    normalized = str(asset_code or "").strip().upper()
+    if normalized.startswith("A") and normalized[1:].isdigit() and len(normalized[1:]) == 6:
+        normalized = normalized[1:]
+    if not (normalized.isdigit() and len(normalized) == 6):
+        raise HTTPException(status_code=400, detail="국내 주식 6자리 코드만 뉴스 조회를 지원합니다.")
+    return normalized
+
+
+def _news_provider_name() -> str:
+    provider = os.getenv("ETF_NEWS_PROVIDER", "naver").strip().lower()
+    if provider not in {"naver", "toss"}:
+        raise HTTPException(status_code=500, detail=f"지원하지 않는 뉴스 제공자입니다: {provider}")
+    return provider
+
+
+def _fetch_asset_news(provider: str, asset_code: str, size: int) -> list[AssetNewsItem]:
+    if provider == "toss":
+        return _fetch_toss_news(asset_code, size)
+    return _fetch_naver_finance_news(asset_code, size)
+
+
+def _provider_news_url(provider: str, asset_code: str) -> str:
+    if provider == "toss":
+        return _toss_stock_news_url(asset_code)
+    return _naver_finance_news_url(asset_code)
+
+
+def _fetch_toss_news(asset_code: str, size: int) -> list[AssetNewsItem]:
+    payload = _fetch_toss_json(
+        f"https://wts-info-api.tossinvest.com/api/v2/news/companies/{asset_code}",
+        params={"size": size, "orderBy": "latest"},
+    )
+    return [
+        AssetNewsItem(
+            id=str(item.get("id") or ""),
+            title=str(item.get("title") or "").strip(),
+            summary=str(item.get("summary") or item.get("contentText") or "").strip() or None,
+            source=_source_name(item.get("source")),
+            created_at=str(item.get("createdAt") or "").strip() or None,
+            url=_toss_news_content_url(asset_code, str(item.get("id") or "")),
+        )
+        for item in _toss_body(payload)
+        if item.get("id") and item.get("title")
+    ][:size]
+
+
+def _fetch_naver_finance_news(asset_code: str, size: int) -> list[AssetNewsItem]:
+    url = "https://finance.naver.com/item/news_news.naver"
+    params = {
+        "code": asset_code,
+        "page": "1",
+        "sm": "title_entity_id.basic",
+        "clusterId": "",
+    }
+    headers = {
+        "accept": "text/html, */*",
+        "referer": _naver_finance_news_url(asset_code),
+        "user-agent": "Mozilla/5.0",
+    }
+    try:
+        with httpx.Client(timeout=8.0, headers=headers) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=_http_status_error_text(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    response.encoding = "euc-kr"
+    return _parse_naver_finance_news(response.text, asset_code)[:size]
+
+
+def _parse_naver_finance_news(html: str, asset_code: str) -> list[AssetNewsItem]:
+    soup = BeautifulSoup(html, "html.parser")
+    items: list[AssetNewsItem] = []
+    seen: set[str] = set()
+    for row in soup.select("table.type5 tr"):
+        row_classes = set(row.get("class") or [])
+        if "relation_lst" in row_classes:
+            continue
+        title_cell = row.find("td", class_="title", recursive=False)
+        link = title_cell.find("a", href=True) if title_cell else None
+        if not link:
+            continue
+        title = _normalize_whitespace(link.get_text(" ", strip=True))
+        article_id, office_id = _naver_article_ids(str(link.get("href") or ""))
+        if not title or not article_id or not office_id:
+            continue
+        item_id = f"{office_id}:{article_id}"
+        if item_id in seen:
+            continue
+        seen.add(item_id)
+        source_cell = row.find("td", class_="info", recursive=False)
+        date_cell = row.find("td", class_="date", recursive=False)
+        source = _normalize_whitespace(source_cell.get_text(" ", strip=True)) if source_cell else None
+        created_at = _normalize_naver_datetime(date_cell.get_text(" ", strip=True)) if date_cell else None
+        items.append(
+            AssetNewsItem(
+                id=item_id,
+                title=title,
+                summary=None,
+                source=source or None,
+                created_at=created_at,
+                url=f"https://n.news.naver.com/mnews/article/{office_id}/{article_id}",
+            )
+        )
+    return items
+
+
+def _naver_article_ids(href: str) -> tuple[str, str]:
+    query = parse_qs(urlparse(urljoin("https://finance.naver.com", href)).query)
+    article_id = (query.get("article_id") or [""])[0].strip()
+    office_id = (query.get("office_id") or [""])[0].strip()
+    return article_id, office_id
+
+
+def _normalize_naver_datetime(value: str) -> str | None:
+    normalized = _normalize_whitespace(value)
+    if not normalized:
+        return None
+    return normalized.replace(".", "-", 2)
+
+
+def _naver_finance_news_url(asset_code: str) -> str:
+    return f"https://finance.naver.com/item/news.naver?code={asset_code}"
+
+
+def _fetch_toss_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "origin": "https://www.tossinvest.com",
+        "referer": "https://www.tossinvest.com/",
+        "user-agent": "Mozilla/5.0",
+    }
+    try:
+        with httpx.Client(timeout=8.0, headers=headers) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=_http_status_error_text(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="토스증권 응답을 해석하지 못했습니다.") from exc
+    return payload if isinstance(payload, dict) else {}
+
+
+def _fetch_dart_disclosures(asset_code: str, size: int) -> list[DisclosureItem]:
+    search_page_url = f"https://dart.fss.or.kr/html/search/SearchCompany_M2.html?textCrpNM={asset_code}"
+    headers = {
+        "accept": "text/html, */*",
+        "referer": "https://dart.fss.or.kr/",
+        "user-agent": "Mozilla/5.0",
+    }
+    try:
+        with httpx.Client(timeout=10.0, headers=headers) as client:
+            page = client.get(search_page_url)
+            page.raise_for_status()
+            corp_code, corp_name = _parse_dart_search_form(page.text)
+            response = client.post(
+                "https://dart.fss.or.kr/dsab001/search.ax",
+                data=_dart_search_payload(corp_code, corp_name, size),
+                headers={
+                    **headers,
+                    "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "x-requested-with": "XMLHttpRequest",
+                    "referer": search_page_url,
+                },
+            )
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=_http_status_error_text(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return _parse_dart_disclosure_items(response.text)[:size]
+
+
+def _parse_dart_search_form(html: str) -> tuple[str, str]:
+    soup = BeautifulSoup(html, "html.parser")
+    corp_code = _input_value(soup, "textCrpCik")
+    corp_name = _input_value(soup, "textCrpNm")
+    if not corp_code or not corp_name:
+        raise HTTPException(status_code=404, detail="DART 회사 코드를 찾지 못했습니다.")
+    return corp_code, corp_name
+
+
+def _input_value(soup: BeautifulSoup, element_id: str) -> str:
+    element = soup.find("input", id=element_id)
+    return str(element.get("value") or "").strip() if element else ""
+
+
+def _dart_search_payload(corp_code: str, corp_name: str, size: int) -> dict[str, str]:
+    today = time.strftime("%Y%m%d")
+    start = time.strftime("%Y%m%d", time.localtime(time.time() - 365 * 24 * 60 * 60))
+    return {
+        "currentPage": "1",
+        "maxResults": str(size),
+        "maxLinks": "10",
+        "sort": "date",
+        "series": "desc",
+        "textCrpCik": corp_code,
+        "pageGubun": "corp",
+        "attachDocNmPopYn": "",
+        "textCrpNm": corp_name,
+        "finalReport": "recent",
+        "startDate": start,
+        "endDate": today,
+        "decadeType": "",
+    }
+
+
+def _parse_dart_disclosure_items(html: str) -> list[DisclosureItem]:
+    soup = BeautifulSoup(html, "html.parser")
+    items: list[DisclosureItem] = []
+    for row in soup.select("tbody#tbody tr"):
+        cells = row.find_all("td")
+        if len(cells) < 5:
+            continue
+        link = cells[2].find("a", href=True)
+        if not link:
+            continue
+        href = str(link.get("href") or "").strip()
+        rcp_no = _extract_query_param(href, "rcpNo")
+        title = _normalize_whitespace(link.get_text(" ", strip=True))
+        submitter = _normalize_whitespace(cells[3].get_text(" ", strip=True))
+        created_at = cells[4].get_text(" ", strip=True).replace(".", "-")
+        if not rcp_no or not title:
+            continue
+        items.append(
+            DisclosureItem(
+                id=rcp_no,
+                title=title,
+                summary=submitter or None,
+                source="DART",
+                created_at=created_at or None,
+                url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcp_no}",
+            )
+        )
+    return items
+
+
+def _normalize_whitespace(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _extract_query_param(url: str, key: str) -> str:
+    marker = f"{key}="
+    if marker not in url:
+        return ""
+    value = url.split(marker, 1)[1]
+    return value.split("&", 1)[0]
+
+
+def _toss_body(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    result = payload.get("result") if isinstance(payload, dict) else None
+    body = result.get("body") if isinstance(result, dict) else None
+    return [item for item in body if isinstance(item, dict)] if isinstance(body, list) else []
+
+
+def _source_name(source: Any) -> str | None:
+    if isinstance(source, dict):
+        return str(source.get("name") or source.get("code") or "").strip() or None
+    return str(source or "").strip() or None
+
+
+def _toss_stock_news_url(asset_code: str) -> str:
+    return f"https://www.tossinvest.com/stocks/A{asset_code}/news"
+
+
+def _toss_news_content_url(asset_code: str, content_id: str) -> str:
+    if not content_id:
+        return _toss_stock_news_url(asset_code)
+    content_params = quote(json.dumps({"id": content_id}, ensure_ascii=False, separators=(",", ":")))
+    return (
+        f"{_toss_stock_news_url(asset_code)}"
+        f"?symbol-or-stock-code=A{asset_code}"
+        f"&contentType=news"
+        f"&sectionName="
+        f"&contentParams={content_params}"
+        f"&contentPrev="
+    )

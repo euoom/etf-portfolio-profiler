@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tansta
 import ReactECharts from "echarts-for-react";
 import type { CellValue, Worksheet } from "exceljs";
 import JSZip from "jszip";
-import { Bot, CircleHelp, Command, Download, Menu, Moon, PanelRightClose, PanelRightOpen, RotateCcw, Search, Send, Square, Sun, X } from "lucide-react";
+import { Bot, CircleHelp, Command, Download, ExternalLink, Menu, Moon, Newspaper, RotateCcw, Search, Send, Square, Sun, X } from "lucide-react";
 import "./styles.css";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
@@ -14,6 +14,7 @@ const adsenseMockEnabled = import.meta.env.DEV || import.meta.env.VITE_ADSENSE_M
 const adsenseClientId = import.meta.env.VITE_ADSENSE_CLIENT_ID || "";
 const adsenseDesktopSlotId = import.meta.env.VITE_ADSENSE_DESKTOP_SLOT_ID || "";
 const adsenseMobileSlotId = import.meta.env.VITE_ADSENSE_MOBILE_SLOT_ID || "";
+const newsEmbedUrl = import.meta.env.VITE_NEWS_EMBED_URL || "";
 const queryClient = new QueryClient();
 const ETF_SUMMARY_LIMIT = 300;
 const ETF_TABLE_PAGE_SIZE = 20;
@@ -221,6 +222,20 @@ type CollectRecentWatchlistResponse = {
     name: string;
     snapshots: unknown[];
     skipped: string[];
+    unavailable?: string[];
+  }[];
+};
+
+type CollectRecentAssetResponse = {
+  asset_code: string;
+  asset_name?: string | null;
+  days: number;
+  funds: {
+    ksd_fund: string;
+    name: string;
+    snapshots: unknown[];
+    skipped: string[];
+    unavailable: string[];
   }[];
 };
 
@@ -242,6 +257,31 @@ type ChatViewContext = {
     etfs: EtfRouteTarget[];
     assets: AssetRouteTarget[];
   };
+};
+
+type AssetNewsItem = {
+  id: string;
+  title: string;
+  summary?: string | null;
+  source?: string | null;
+  created_at?: string | null;
+  url: string;
+};
+
+type AssetNewsResponse = {
+  asset_code: string;
+  provider: string;
+  provider_news_url: string;
+  order_by: string;
+  items: AssetNewsItem[];
+};
+
+type AssetDisclosureItem = AssetNewsItem;
+
+type AssetDisclosureResponse = {
+  asset_code: string;
+  provider: string;
+  items: AssetDisclosureItem[];
 };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -320,6 +360,7 @@ function App() {
   const analysisModeRef = useRef<AnalysisMode>("list");
   const chartInstanceRef = useRef<ChartInstance | null>(null);
   const chartRowClickHandlerRef = useRef<((event: ChartClickEvent) => void) | null>(null);
+  const aiPanelRef = useRef<HTMLElement>(null);
   const didMountSummaryResetRef = useRef(false);
   const [selectedFund, setSelectedFund] = useState("KR70183J0002");
   const [selectedAssetCode, setSelectedAssetCode] = useState("");
@@ -330,8 +371,8 @@ function App() {
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("list");
-  const [aiPanelOpen, setAiPanelOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 980);
-  const [aiPanelWidth, setAiPanelWidth] = useState(420);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [newsPanelWidth, setNewsPanelWidth] = useState(380);
   const [etfChartMetric, setEtfChartMetric] = useState<EtfChartMetric>("change_score");
   const [etfTypeFilter, setEtfTypeFilter] = useState<EtfTypeFilter>("all");
   const [crossChartMetric, setCrossChartMetric] = useState<CrossChartMetric>("change_score");
@@ -353,8 +394,9 @@ function App() {
   const [toasts, setToasts] = useState<AppToast[]>([]);
   const [viewRefreshKey, setViewRefreshKey] = useState(0);
   const [summaryPage, setSummaryPage] = useState(1);
+  const [assetPage, setAssetPage] = useState(1);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [mobileActiveTab, setMobileActiveTab] = useState<"table" | "chart">("table");
+  const [mobileActiveTab, setMobileActiveTab] = useState<"table" | "chart" | "news">("table");
   const [isAiClosing, setIsAiClosing] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
   const lastAnalysisHashRef = useRef("#/");
@@ -405,6 +447,7 @@ function App() {
   useEffect(() => {
     function stopResize() {
       document.body.classList.remove("resizing-ai-panel");
+      document.body.classList.remove("resizing-news-panel");
     }
 
     window.addEventListener("mouseup", stopResize);
@@ -497,7 +540,17 @@ function App() {
     },
   });
 
-  const rawSummaryRows = etfChangeSummary.data?.rows ?? [];
+  const collectRecentAsset = useMutation({
+    mutationFn: () => api<CollectRecentAssetResponse>(`/api/collect/tiger/asset-recent?${getAssetExposureQuery(selectedAssetCode, selectedAssetName, `days=${periodDays}`)}`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["asset-exposures"] });
+      queryClient.invalidateQueries({ queryKey: ["cross-etf-weight-changes"] });
+      queryClient.invalidateQueries({ queryKey: ["etf-change-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["holdings-pivot"] });
+    },
+  });
+
+  const rawSummaryRows = useMemo(() => etfChangeSummary.data?.rows ?? [], [etfChangeSummary.data?.rows]);
   const summaryRows = useMemo(() => filterSummaryRowsByEtfType(rawSummaryRows, etfTypeFilter), [etfTypeFilter, rawSummaryRows]);
   const summaryPageCount = Math.max(1, Math.ceil(summaryRows.length / ETF_TABLE_PAGE_SIZE));
   const currentSummaryPage = Math.min(summaryPage, summaryPageCount);
@@ -506,8 +559,16 @@ function App() {
     () => summaryRows.slice(summaryPageStart, summaryPageStart + ETF_TABLE_PAGE_SIZE),
     [summaryPageStart, summaryRows],
   );
-  const pivotRows = pivot.data?.rows ?? [];
-  const crossRows = crossEtfChanges.data?.rows ?? [];
+  const pivotRows = useMemo(() => pivot.data?.rows ?? [], [pivot.data?.rows]);
+  const crossRows = useMemo(() => crossEtfChanges.data?.rows ?? [], [crossEtfChanges.data?.rows]);
+  const assetExposureRows = useMemo(() => assetExposures.data?.rows ?? [], [assetExposures.data?.rows]);
+  const assetPageCount = Math.max(1, Math.ceil(assetExposureRows.length / ETF_TABLE_PAGE_SIZE));
+  const currentAssetPage = Math.min(assetPage, assetPageCount);
+  const assetPageStart = assetExposureRows.length ? (currentAssetPage - 1) * ETF_TABLE_PAGE_SIZE : 0;
+  const assetPageRows = useMemo(
+    () => assetExposureRows.slice(assetPageStart, assetPageStart + ETF_TABLE_PAGE_SIZE),
+    [assetExposureRows, assetPageStart],
+  );
   const pivotDates = pivot.data?.dates ?? [];
   const actionCandidateEtfs = useMemo(
     () => uniqueEtfCandidates(rawSummaryRows.map((item) => ({ ksd_fund: item.ksd_fund, etf_name: item.etf_name }))),
@@ -623,7 +684,10 @@ function App() {
 
   useEffect(() => {
     const currentFunds = new Set(summaryRows.map((item) => item.ksd_fund));
-    setSelectedDownloadFunds((current) => current.filter((ksdFund) => currentFunds.has(ksdFund)));
+    setSelectedDownloadFunds((current) => {
+      const next = current.filter((ksdFund) => currentFunds.has(ksdFund));
+      return next.length === current.length ? current : next;
+    });
   }, [summaryRows]);
 
   useEffect(() => {
@@ -645,13 +709,27 @@ function App() {
     }
   }, [analysisMode, currentSummaryPage, etfChangeSummary.isLoading, summaryPage]);
 
+  useEffect(() => {
+    setAssetPage(1);
+  }, [analysisPeriodQuery, selectedAssetCode, selectedAssetName]);
+
+  useEffect(() => {
+    if (analysisMode !== "asset" || assetExposures.isLoading) return;
+    if (assetPage !== currentAssetPage) {
+      setAssetPage(currentAssetPage);
+    }
+  }, [analysisMode, assetExposures.isLoading, assetPage, currentAssetPage]);
+
   const selectedDownloadSet = useMemo(() => new Set(selectedDownloadFunds), [selectedDownloadFunds]);
   const allListRowsSelected = summaryRows.length > 0 && summaryRows.every((item) => selectedDownloadSet.has(item.ksd_fund));
   const partiallyListRowsSelected = selectedDownloadFunds.length > 0 && !allListRowsSelected;
 
   useEffect(() => {
     const currentAssets = new Set(crossDisplayRows.map(getAssetRowKey));
-    setSelectedDownloadAssets((current) => current.filter((assetCode) => currentAssets.has(assetCode)));
+    setSelectedDownloadAssets((current) => {
+      const next = current.filter((assetCode) => currentAssets.has(assetCode));
+      return next.length === current.length ? current : next;
+    });
   }, [crossDisplayRows]);
 
   const selectedCrossDownloadSet = useMemo(() => new Set(selectedDownloadAssets), [selectedDownloadAssets]);
@@ -1532,15 +1610,17 @@ function App() {
         title: "현재 화면 데이터 새로고침",
         subtitle: "분석 API 캐시를 비우고 화면 데이터를 다시 가져옵니다.",
         keywords: ["새로고침", "refresh", "reload", "캐시"],
-        run: () => {
-          setViewRefreshKey((current) => current + 1);
-          queryClient.invalidateQueries({ queryKey: ["holdings-pivot"] });
-          queryClient.invalidateQueries({ queryKey: ["cross-etf-weight-changes"] });
-          queryClient.invalidateQueries({ queryKey: ["etf-change-summary"] });
-          queryClient.invalidateQueries({ queryKey: ["asset-exposures"] });
-          showToast({
-            tone: "success",
-            title: "현재 화면 데이터 새로고침",
+          run: () => {
+            setViewRefreshKey((current) => current + 1);
+            queryClient.invalidateQueries({ queryKey: ["holdings-pivot"] });
+            queryClient.invalidateQueries({ queryKey: ["cross-etf-weight-changes"] });
+            queryClient.invalidateQueries({ queryKey: ["etf-change-summary"] });
+            queryClient.invalidateQueries({ queryKey: ["asset-exposures"] });
+            void queryClient.refetchQueries({ queryKey: ["asset-news"], type: "active" });
+            void queryClient.refetchQueries({ queryKey: ["asset-disclosures"], type: "active" });
+            showToast({
+              tone: "success",
+              title: "현재 화면 데이터 새로고침",
             message: "분석 API 캐시를 비우고 화면 데이터를 다시 불러옵니다.",
           });
         },
@@ -1586,6 +1666,46 @@ function App() {
       );
     }
 
+    if (analysisMode === "asset" && selectedAssetCode) {
+      const assetLabel = selectedAsset?.asset_name || selectedAssetName || selectedAssetCode;
+      items.splice(
+        2,
+        0,
+        {
+          id: "collect-current-asset-recent",
+          group: "데이터 업데이트",
+          title: "현재 종목 관련 ETF 업데이트",
+          subtitle: collectRecentAsset.isPending ? "업데이트 중" : `${assetLabel}을 편입한 ETF의 ${periodLabel} 구성종목을 갱신합니다.`,
+          keywords: ["수집", "업데이트", "선택", "종목상세", "현재종목", assetLabel, selectedAssetCode],
+          disabled: collectRecentAsset.isPending,
+          run: () =>
+            runCommandWithToast({
+              loadingTitle: "현재 종목 관련 ETF 업데이트 중",
+              loadingMessage: `${assetLabel}을 편입한 ETF만 확인합니다.`,
+              successTitle: "현재 종목 관련 ETF 업데이트 완료",
+              successMessage: formatRecentAssetCollectSummary,
+              action: () => collectRecentAsset.mutateAsync(),
+            }),
+        },
+        {
+          id: "refresh-current-asset-news",
+          group: "데이터 업데이트",
+          title: "현재 종목 뉴스·공시 업데이트",
+          subtitle: `${assetLabel}의 뉴스와 공시 목록을 다시 가져옵니다.`,
+          keywords: ["뉴스", "공시", "업데이트", "새로고침", "종목상세", "현재종목", assetLabel, selectedAssetCode],
+          run: () => {
+            queryClient.invalidateQueries({ queryKey: ["asset-news", normalizeKrAssetCode(selectedAssetCode)] });
+            queryClient.invalidateQueries({ queryKey: ["asset-disclosures", normalizeKrAssetCode(selectedAssetCode)] });
+            showToast({
+              tone: "success",
+              title: "현재 종목 뉴스·공시 업데이트",
+              message: `${assetLabel}의 뉴스와 공시 목록을 다시 불러옵니다.`,
+            });
+          },
+        },
+      );
+    }
+
     return items;
   }, [
     analysisMode,
@@ -1593,7 +1713,11 @@ function App() {
     collectHoldings,
     collectRecentHoldings,
     collectRecentWatchlist,
+    collectRecentAsset,
     periodLabel,
+    selectedAsset,
+    selectedAssetCode,
+    selectedAssetName,
     selectedEtfName,
   ]);
 
@@ -1658,7 +1782,7 @@ function App() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "p") {
+      if (event.key === "/" && !event.ctrlKey && !event.metaKey && !event.altKey && !isEditableTarget(event.target)) {
         event.preventDefault();
         setCommandPaletteOpen(true);
         setSelectedCommandIndex(0);
@@ -1672,6 +1796,10 @@ function App() {
   function handleAiPanelClose() {
     if (isAiClosing) {
       return;
+    }
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement && aiPanelRef.current?.contains(activeElement)) {
+      activeElement.blur();
     }
     if (window.innerWidth <= 980) {
       setIsAiClosing(true);
@@ -1695,19 +1823,19 @@ function App() {
     navigateHome();
   }
 
-  function startAiPanelResize(event: React.PointerEvent<HTMLDivElement>) {
+  function startNewsPanelResize(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
     const startX = event.clientX;
-    const startWidth = aiPanelWidth;
-    document.body.classList.add("resizing-ai-panel");
+    const startWidth = newsPanelWidth;
+    document.body.classList.add("resizing-news-panel");
 
     function handleMove(moveEvent: PointerEvent) {
       const nextWidth = startWidth + (startX - moveEvent.clientX);
-      setAiPanelWidth(clamp(nextWidth, 300, 680));
+      setNewsPanelWidth(clamp(nextWidth, 300, 640));
     }
 
     function handleUp() {
-      document.body.classList.remove("resizing-ai-panel");
+      document.body.classList.remove("resizing-news-panel");
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
     }
@@ -1868,17 +1996,11 @@ function App() {
                 )}
               </>
             )}
-            {!aiPanelOpen && (
-              <button className="ai-topbar-toggle" onClick={() => setAiPanelOpen(true)}>
-                <PanelRightOpen size={16} />
-                <span>AI 패널</span>
-              </button>
-            )}
             <span className="toolbar-divider" aria-hidden="true" />
             <button
               className="icon-button"
               aria-label="명령 팔레트 열기"
-              title="명령 팔레트 (Ctrl+Shift+P)"
+              title="명령 팔레트 (/)"
               onClick={() => {
                 setCommandPaletteOpen(true);
                 setSelectedCommandIndex(0);
@@ -1911,8 +2033,8 @@ function App() {
       </header>
 
       <main
-        className={`${aiPanelOpen && !policyOpen ? "workspace" : "workspace ai-collapsed"}${shouldRenderAds ? " with-ads" : ""}`}
-        style={aiPanelOpen ? ({ "--ai-panel-width": `${aiPanelWidth}px` } as React.CSSProperties) : undefined}
+        className={`workspace${policyOpen ? " policy-workspace" : ""}${shouldRenderAds ? " with-ads" : ""}`}
+        style={!policyOpen ? ({ "--news-panel-width": `${newsPanelWidth}px` } as React.CSSProperties) : undefined}
       >
         {shouldRenderAds ? (
           <AdSlot
@@ -1925,7 +2047,7 @@ function App() {
         {policyOpen ? (
           <PolicyPage />
         ) : (
-        <section className="analysis-canvas">
+        <>
           <div className="mobile-tab-selector">
             <button
               className={mobileActiveTab === "table" ? "active" : ""}
@@ -1939,7 +2061,14 @@ function App() {
             >
               분석 차트
             </button>
+            <button
+              className={mobileActiveTab === "news" ? "active" : ""}
+              onClick={() => setMobileActiveTab("news")}
+            >
+              뉴스
+            </button>
           </div>
+        <section className={`analysis-canvas${mobileActiveTab === "news" ? " mobile-news-hidden" : ""}`}>
           <section className={`pivot-panel canvas-section${mobileActiveTab === "table" ? "" : " mobile-hidden"}`}>
             <div className="pivot-grid-wrap refreshable-view" key={`grid-${viewRefreshKey}`}>
               {isCurrentTableLoading ? (
@@ -2135,7 +2264,7 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {assetExposures.data.rows.map((row) => {
+                      {assetPageRows.map((row) => {
                         const quantityDeltaPct = getInterpretableDeltaPct(row.start_quantity, row.end_quantity, selectedAssetCode, selectedAssetName);
                         const amountDeltaPct = getInterpretableDeltaPct(row.start_valuation_amount, row.end_valuation_amount, selectedAssetCode, selectedAssetName);
                         const isCashLike = isCashLikeHolding(selectedAssetCode, selectedAssetName);
@@ -2174,6 +2303,14 @@ function App() {
                 pageCount={summaryPageCount}
                 pageSize={ETF_TABLE_PAGE_SIZE}
                 onPageChange={setListPage}
+              />
+            ) : analysisMode === "asset" && assetExposureRows.length > ETF_TABLE_PAGE_SIZE ? (
+              <PaginationBar
+                total={assetExposureRows.length}
+                page={currentAssetPage}
+                pageCount={assetPageCount}
+                pageSize={ETF_TABLE_PAGE_SIZE}
+                onPageChange={setAssetPage}
               />
             ) : null}
           </section>
@@ -2258,42 +2395,59 @@ function App() {
             )}
           </section>
         </section>
+        </>
         )}
 
-        {!policyOpen && (aiPanelOpen || isAiClosing) ? (
-          <>
-            <button
-              type="button"
-              className={"ai-panel-backdrop" + (isAiClosing ? " is-closing" : "")}
-              aria-label="AI 패널 닫기"
-              onClick={handleAiPanelClose}
-            />
-            <div
-              className="ai-panel-resizer"
-              role="separator"
-              aria-label="AI 패널 너비 조절"
-              aria-orientation="vertical"
-              title="드래그해서 AI 패널 너비 조절"
-              onPointerDown={startAiPanelResize}
-              onDoubleClick={() => setAiPanelWidth(420)}
-            />
-            <aside className={"ai-panel" + (isAiClosing ? " is-closing" : "")}>
-              <ChatPanel
-                ref={chatPanelRef}
-                selectedFund={selectedFund}
-                periodLabel={periodLabel}
-                summaryCount={summaryRows.length}
-                currentModeLabel={analysisMode === "list" ? "ETF별" : analysisMode === "single" ? "단일 ETF" : analysisMode === "asset" ? "종목 상세" : "종목별"}
-                showDebugMeta={showDevTools}
-                buildContext={buildChatContext}
-                onAction={runChatAction}
-                onBeforeSubmit={handleChatBeforeSubmit}
-                onClose={handleAiPanelClose}
-              />
-            </aside>
-          </>
+        {!policyOpen ? (
+          <div
+            className="news-panel-resizer"
+            role="separator"
+            aria-label="뉴스 패널 너비 조절"
+            aria-orientation="vertical"
+            title="드래그해서 뉴스 패널 너비 조절"
+            onPointerDown={startNewsPanelResize}
+            onDoubleClick={() => setNewsPanelWidth(380)}
+          />
+        ) : null}
+        {!policyOpen ? (
+          <NewsPanel
+            key={`news-${viewRefreshKey}`}
+            className={mobileActiveTab === "news" ? "" : " mobile-hidden"}
+            selectedAssetCode={selectedAssetCode}
+            embedUrl={newsEmbedUrl}
+          />
         ) : null}
       </main>
+
+      {!policyOpen && (aiPanelOpen || isAiClosing) ? (
+        <>
+          <button
+            type="button"
+            className={"ai-panel-backdrop" + (isAiClosing ? " is-closing" : "")}
+            aria-label="AI 채팅 배경 닫기"
+            onClick={handleAiPanelClose}
+          />
+        </>
+      ) : null}
+      {!policyOpen ? (
+        <aside
+          ref={aiPanelRef}
+          className={`ai-panel ai-chat-popup${aiPanelOpen || isAiClosing ? "" : " is-hidden"}${isAiClosing ? " is-closing" : ""}`}
+        >
+          <ChatPanel
+            ref={chatPanelRef}
+            selectedFund={selectedFund}
+            periodLabel={periodLabel}
+            summaryCount={summaryRows.length}
+            currentModeLabel={analysisMode === "list" ? "ETF별" : analysisMode === "single" ? "단일 ETF" : analysisMode === "asset" ? "종목 상세" : "종목별"}
+            showDebugMeta={showDevTools}
+            buildContext={buildChatContext}
+            onAction={runChatAction}
+            onBeforeSubmit={handleChatBeforeSubmit}
+            onClose={handleAiPanelClose}
+          />
+        </aside>
+      ) : null}
 
       {shouldRenderAds ? (
         <AdSlot
@@ -2306,10 +2460,10 @@ function App() {
 
       {!policyOpen && !aiPanelOpen && (
         <button
-          className={`mobile-ai-fab${shouldRenderAds ? " above-mobile-ad" : ""}`}
+          className={`ai-fab${shouldRenderAds ? " above-mobile-ad" : ""}`}
           onClick={() => setAiPanelOpen(true)}
-          aria-label="AI 분석 상담"
-          title="AI 분석 상담"
+          aria-label="AI 채팅 열기"
+          title="AI 채팅"
         >
           <Bot size={24} />
         </button>
@@ -2372,6 +2526,106 @@ function AdSlot({
     <aside className={`ad-slot ${placement} mock-ad-slot`} aria-label="광고 mock">
       <span>AD</span>
       <strong>{placement === "desktop-left-rail" ? "160 x 600" : "Mobile banner"}</strong>
+    </aside>
+  );
+}
+
+function NewsPanel({
+  className = "",
+  selectedAssetCode,
+  embedUrl,
+}: {
+  className?: string;
+  selectedAssetCode?: string;
+  embedUrl: string;
+}) {
+  const [activeTab, setActiveTab] = useState<"news" | "disclosures">("news");
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const sourceUrl = embedUrl.trim();
+  const normalizedAssetCode = normalizeKrAssetCode(selectedAssetCode);
+  const canLoadAssetNews = Boolean(normalizedAssetCode);
+  const news = useQuery({
+    queryKey: ["asset-news", normalizedAssetCode],
+    queryFn: () => api<AssetNewsResponse>(`/api/assets/${encodeURIComponent(normalizedAssetCode ?? "")}/news?size=20`),
+    enabled: canLoadAssetNews,
+    staleTime: 1000 * 60 * 5,
+  });
+  const disclosures = useQuery({
+    queryKey: ["asset-disclosures", normalizedAssetCode],
+    queryFn: () => api<AssetDisclosureResponse>(`/api/assets/${encodeURIComponent(normalizedAssetCode ?? "")}/disclosures?size=20`),
+    enabled: canLoadAssetNews,
+    staleTime: 1000 * 60 * 5,
+  });
+  const activeItems = activeTab === "news" ? news.data?.items ?? [] : disclosures.data?.items ?? [];
+  const activeQuery = activeTab === "news" ? news : disclosures;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <aside className={`news-panel${className}`}>
+      {canLoadAssetNews ? (
+        <>
+          <div className="news-tabs" role="tablist" aria-label="뉴스와 공시">
+            <button className={activeTab === "news" ? "active" : ""} onClick={() => setActiveTab("news")} role="tab" aria-selected={activeTab === "news"}>
+              뉴스
+            </button>
+            <button className={activeTab === "disclosures" ? "active" : ""} onClick={() => setActiveTab("disclosures")} role="tab" aria-selected={activeTab === "disclosures"}>
+              공시
+            </button>
+          </div>
+          {activeQuery.isLoading ? (
+            <LoadingState title="뉴스를 불러오는 중입니다" body="선택한 종목의 최신 목록을 확인하고 있습니다." />
+          ) : activeQuery.isError ? (
+            <EmptyState title="뉴스를 불러오지 못했습니다" body={activeQuery.error instanceof Error ? activeQuery.error.message : "잠시 후 다시 시도하세요."} />
+          ) : activeItems.length ? (
+            <div className="news-list">
+              {activeItems.map((item) => (
+                <article className="news-card" key={item.id}>
+                  {activeTab === "news" ? (
+                    <div className="news-card-meta">
+                      <span>{item.source || "뉴스"}</span>
+                      <time>{formatRelativeOrDate(item.created_at, nowTick)}</time>
+                    </div>
+                  ) : null}
+                  {activeTab === "disclosures" ? (
+                    <div className="news-card-head">
+                      <a href={item.url} target="_blank" rel="noreferrer">
+                        {item.title}
+                      </a>
+                      <time>{formatRelativeOrDate(item.created_at, nowTick)}</time>
+                    </div>
+                  ) : (
+                    <a href={item.url} target="_blank" rel="noreferrer">
+                      {item.title}
+                    </a>
+                  )}
+                  {item.summary ? <p>{item.summary}</p> : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="표시할 항목이 없습니다" body="선택한 종목의 최신 목록을 찾지 못했습니다." />
+          )}
+        </>
+      ) : sourceUrl ? (
+        <iframe
+          className="news-frame"
+          title="외부 뉴스"
+          src={sourceUrl}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        />
+      ) : (
+        <div className="news-empty">
+          <Newspaper size={28} />
+          <strong>종목을 선택하면 뉴스가 표시됩니다</strong>
+          <p>국내 6자리 종목 코드가 있는 상세 화면에서는 최신 뉴스와 공시 목록을 보여줍니다.</p>
+        </div>
+      )}
     </aside>
   );
 }
@@ -2531,6 +2785,13 @@ function formatRecentWatchlistCollectSummary(result: CollectRecentWatchlistRespo
   const collectedCount = result.funds.reduce((sum, fund) => sum + fund.snapshots.length, 0);
   const skippedCount = result.funds.reduce((sum, fund) => sum + fund.skipped.length, 0);
   return `${formatCompactNumber(result.funds.length)}개 ETF 처리, 수집 ${formatCompactNumber(collectedCount)}개, 재사용 ${formatCompactNumber(skippedCount)}개 스냅샷입니다.`;
+}
+
+function formatRecentAssetCollectSummary(result: CollectRecentAssetResponse) {
+  const collectedCount = result.funds.reduce((sum, fund) => sum + fund.snapshots.length, 0);
+  const skippedCount = result.funds.reduce((sum, fund) => sum + fund.skipped.length, 0);
+  const unavailableCount = result.funds.reduce((sum, fund) => sum + fund.unavailable.length, 0);
+  return `${formatCompactNumber(result.funds.length)}개 관련 ETF 처리, 수집 ${formatCompactNumber(collectedCount)}개, 재사용 ${formatCompactNumber(skippedCount)}개, 미제공 ${formatCompactNumber(unavailableCount)}개 스냅샷입니다.`;
 }
 
 function isZeroLike(value: number | null | undefined, epsilon = 1e-9): value is null | undefined {
@@ -2795,8 +3056,8 @@ const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel
           <button className="panel-toggle" aria-label="새 채팅" title="새 채팅 (Ctrl+Shift+O)" onClick={resetChat}>
             <RotateCcw size={16} />
           </button>
-          <button className="panel-toggle" aria-label="AI 분석 패널 접기" title="패널 접기" onClick={onClose}>
-            <PanelRightClose size={16} />
+          <button className="panel-toggle" aria-label="AI 채팅 닫기" title="채팅 닫기" onClick={onClose}>
+            <X size={16} />
           </button>
         </div>
       </div>
@@ -2960,9 +3221,9 @@ function CommandPalette({
                 onRun(items[activeIndex]);
               }
             }}
-            placeholder="ETF/종목 검색, 명령은 > 입력"
+            placeholder="ETF/종목 검색"
           />
-          <span className="command-kbd">Ctrl Shift P</span>
+          <span className="command-kbd">/</span>
         </div>
         <div className="command-list" role="listbox" ref={listRef}>
           {items.length ? (
@@ -3682,6 +3943,26 @@ function formatFileTimestamp(value: Date) {
   return `${value.getFullYear()}${pad2(value.getMonth() + 1)}${pad2(value.getDate())}_${pad2(value.getHours())}${pad2(value.getMinutes())}${pad2(value.getSeconds())}`;
 }
 
+function formatRelativeOrDate(value?: string | null, now = Date.now()) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 16).replace("T", " ");
+  const diffMs = now - date.getTime();
+  const diffMinutes = Math.floor(diffMs / 60000);
+  if (diffMinutes >= 0 && diffMinutes < 1) return "방금 전";
+  if (diffMinutes >= 1 && diffMinutes < 60) return `${diffMinutes}분 전`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours >= 0 && diffHours < 24) return `${diffHours}시간 전`;
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function normalizeKrAssetCode(value?: string) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (/^A\d{6}$/.test(normalized)) return normalized.slice(1);
+  if (/^\d{6}$/.test(normalized)) return normalized;
+  return "";
+}
+
 function pad2(value: number) {
   return value.toString().padStart(2, "0");
 }
@@ -3698,6 +3979,12 @@ function downloadTextFile(fileName: string, content: string) {
 
 function normalizeCommandText(value: string) {
   return value.toLowerCase().replace(/\s+/g, "");
+}
+
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable;
 }
 
 function parseRoute(): { mode: AnalysisMode; ksdFund?: string; assetCode?: string; assetName?: string; page?: number } {

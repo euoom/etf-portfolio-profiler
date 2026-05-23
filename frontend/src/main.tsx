@@ -2424,7 +2424,7 @@ function App() {
           <button
             type="button"
             className={"ai-panel-backdrop" + (isAiClosing ? " is-closing" : "")}
-            aria-label="AI 채팅 닫기"
+            aria-label="AI 채팅 배경 닫기"
             onClick={handleAiPanelClose}
           />
         </>

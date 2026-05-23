@@ -9,6 +9,7 @@ test("renders dashboard shell and streams a chat response without action cards",
   await page.goto("./");
 
   await expect(page.getByText("ETF Portfolio Profiler")).toBeVisible();
+  await page.getByRole("button", { name: "AI 채팅 열기" }).click();
   await expect(page.getByRole("button", { name: "최근 5영업일간 변동이 큰 ETF 5개만 요약해줘" })).toBeVisible();
 
   await page.getByRole("button", { name: "최근 5영업일간 변동이 큰 ETF 5개만 요약해줘" }).click();
@@ -28,6 +29,7 @@ test("can abort an in-flight chat request", async ({ page }) => {
   });
 
   await page.goto("./");
+  await page.getByRole("button", { name: "AI 채팅 열기" }).click();
   await page.getByPlaceholder("분석 요청 입력").fill("중단 동작 확인");
   await page.getByPlaceholder("분석 요청 입력").press("Enter");
 
@@ -45,7 +47,7 @@ test("opens command palette and separates search from update commands", async ({
   const palette = page.getByRole("dialog", { name: "명령 팔레트" });
   await expect(palette).toBeVisible();
 
-  const input = page.getByPlaceholder("ETF/종목 검색, 명령은 > 입력");
+  const input = page.getByPlaceholder("ETF/종목 검색");
   await input.fill(">");
 
   await expect(page.getByText("데이터 업데이트").first()).toBeVisible();
@@ -64,10 +66,10 @@ test("mobile menu, custom period inputs, and AI bottom sheet are usable", async 
   await expect(page.locator(".date-range-inputs input")).toHaveCount(2);
   await expect(page.locator(".date-range-inputs")).toBeVisible();
 
-  await page.getByRole("button", { name: "AI 분석 상담" }).click();
-  await expect(page.getByRole("button", { name: "AI 패널 닫기" })).toBeVisible();
+  await page.getByRole("button", { name: "AI 채팅 열기" }).click();
+  await expect(page.getByRole("button", { name: "AI 채팅 닫기" })).toBeVisible();
   await expect(page.locator(".ai-panel")).toBeVisible();
 
-  await page.getByRole("button", { name: "AI 패널 닫기" }).click();
+  await page.getByRole("button", { name: "AI 채팅 닫기" }).click();
   await expect(page.locator(".ai-panel")).toBeHidden();
 });

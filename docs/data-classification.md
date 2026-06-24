@@ -90,6 +90,12 @@ data/asset_classification_overrides.json
 | `money_market` | 머니마켓 | `asset_class`, `category`, `name` | 머니마켓/MMF/CD금리/CD1년/KOFR/단기채권/금리 패턴 |
 | `other` | 기타 | `asset_class`, `category`, `name` | 위 규칙에 걸리지 않는 ETF |
 
+## Future ETF Interest Categories
+
+ETF 이름과 편입 종목을 함께 보고 사용자의 관심사 기준으로 재분류하는 별도 카테고리 축을 둡니다. 이 축은 원천 `category`나 현재 `etf_type`을 대체하기보다, 지수/반도체/원자재(금, 은, 원유 등)처럼 사용자가 묶어서 탐색하기 좋은 주제를 표현합니다.
+
+선물, 옵션, 커버드콜처럼 현재 계산식과 기획 의도에 바로 맞지 않을 수 있는 ETF는 `제외`로 표시합니다. 현재 TIGER 수집 DB 기준 전체 ETF 검토 목록은 `data/tiger_etf_review_list.csv`에 `ETF이름,현재기준의카테고리,제외여부,변경할카테고리` 형식으로 둡니다. `제외여부` 값은 `사용` 또는 `제외`를 사용하고, `변경할카테고리`는 이름 기반 1차 초안으로 둔 뒤 이후 편입 종목과 AI 추론 결과로 보정합니다.
+
 Override file:
 
 ```text
